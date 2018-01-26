@@ -1,0 +1,97 @@
+-- {-# LANGUAGE RecordWildCards #-}
+module Dep where
+
+import           Data.Set (Set)
+import qualified Data.Set as S
+import Control.Monad.Reader
+
+--- * Dependency -----------------------------------------------------------------------------------------------------
+
+data E v =  v :> v deriving (Eq, Ord, Show)
+data D = Identity | Additive | Multiplicative | Exponential deriving (Eq, Ord, Show)
+
+type U v = (D, E v)
+type B v = (E v, E v)
+
+data F v = F
+  { unary  :: Set (U v)
+  , binary :: Set (B v) }
+  deriving Show
+
+type Flow v = Reader [v] (F v)
+
+
+empty :: F v
+empty = F { unary = S.empty, binary = S.empty}
+
+isSubsetOf :: Ord v => F v -> F v -> Bool
+isSubsetOf f1 f2 = unary f1 `S.isSubsetOf` unary f2 && binary f1 `S.isSubsetOf` binary f2
+
+union :: Ord v => F v -> F v -> F v
+union f1 f2 = F 
+  { unary = unary f1 `S.union` unary f2 
+  , binary = binary f1 `S.union` binary f2 }
+
+identity :: Reader [v] [U v]
+identity = ask >>= \vs -> return [ (Identity, v :> v) | v <- vs ]
+
+complete :: Ord v => [U v] -> F v
+complete ds = F
+  { unary  = S.fromList ds
+  , binary = S.fromList bs }
+  where
+  bs = [ (i :> k, j :> l)
+       | (d1,i :> k) <- ds
+       , (d2, j :> l) <- ds
+       , i /= j || k /= l
+       , d1 `max` d2 <= Additive ]
+
+skip :: Ord v => Flow v
+skip = complete <$> identity
+
+plus :: Ord v => v -> v -> v -> Flow v
+plus r s t = ask >>= \vs -> return $ complete $
+  let ids =  [ (Identity, v :> v) | v <- vs, v /= r ] in
+  if s /= t
+  then (Additive, s :> r): (Multiplicative, t :> r): ids
+  else (Multiplicative, s :> r) : ids
+
+mult :: Ord v => v -> v -> v -> Flow v
+mult r s t = ask >>= \vs -> return $ complete $
+  (Multiplicative, s :> r) :(Multiplicative, t :> r) : [ (Identity, v :> v) | v <- vs, v /= r ]
+
+--- * Operations -----------------------------------------------------------------------------------------------------
+
+alternate :: Ord v => F v -> F v -> F v
+alternate f1 f2 = F
+  { unary  = unary f1  `S.union` unary f2
+  , binary = binary f1 `S.union` binary f2}
+
+concatenate :: Ord v => F v -> F v -> F v
+concatenate f1 f2 = F
+  { unary =
+      S.fromList $
+        [ (d1 `max` d2   , i :> k) | (d1, i :> x) <- us1, (d2, z :> k) <- us2, x == z ] ++
+        [ (Multiplicative, i :> k) | (i :> x, i' :> x') <- bs1, i == i', (z :> k, z' :> k') <- bs2, k == k', x == z && x' == z']
+
+  , binary =
+      S.fromList $
+        [ (i :> k, i :> k')  | (d1, i :> x) <- us1, d1 <= Additive, (z :> k, z' :> k') <- bs2, x == z && x == z' ] ++
+        [ (i :> k, i' :> k)  | (i :> x, i' :> x') <- bs1,  (d2, z :> k) <- us2, d2 <= Additive, x == z && x' == z]  ++
+        [ (i :> k, i' :> k') | (i :> x, i' :> x') <- bs1, (z :> k, z' :> k') <- bs2, i /= i' || k /= k', x == z && x' == z' ] }
+  where
+    us1 = S.toList (unary f1)
+    us2 = S.toList (unary f2)
+    bs1 = S.toList (binary f1)
+    bs2 = S.toList (binary f2)
+
+-- iterate ::  Ord v => v -> F v -> Flow v
+-- iterate v f = lfp ==  
+--   where
+--   lfp f = ask >>= \vs -> go vs f empty f
+--   go vs new old action
+--     | new `isSubsetOf` old = old
+--     | otherwise            = go vs new' new f
+--       where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate` action)
+
+
