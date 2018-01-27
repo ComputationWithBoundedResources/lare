@@ -15,7 +15,8 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           Debug.Trace
 
-import Dep (Dom(..), Annot)
+import Domain.Dom
+import Domain.RE
 
 
 
@@ -36,6 +37,7 @@ lift1 k e = edge (src e) (k $ att e) (dst e)
 lift2 :: (e1 -> e2 -> e) -> Edge v e1 -> Edge v e2 -> Edge v e
 lift2 k e1 e2 = edge (src e1) (att e1 `k` att e2) (dst e2)
 
+
 type Cfg v e = [Edge v e]
 
 nodes :: Eq v => Cfg v e -> [v]
@@ -47,9 +49,9 @@ sources cfg = nub (fmap src cfg) \\ nub (fmap dst cfg)
 sinks :: Eq v => Cfg v e -> [v]
 sinks cfg = nub (fmap dst cfg) \\ nub (fmap src cfg)
 
+
 data V v = V v | Out v | In v
   deriving (Eq, Ord, Show)
-
 
 
 --- * Program --------------------------------------------------------------------------------------------------------
@@ -62,12 +64,6 @@ data Tree a = Tree a [Tree a]
   deriving Show
 
 
-
-
-
-
-
-
 --- * Loop -----------------------------------------------------------------------------------------------------------
 
 data Loop v e = Loop
@@ -78,10 +74,6 @@ data Loop v e = Loop
   , cuts    :: [v] }
 
 type Program v e = Top (Cfg (V v) e) (Loop v e)
-
-
-
-
 
 
 --- * Attribute Domain -----------------------------------------------------------------------------------------------
@@ -198,28 +190,6 @@ partition3 p1 p2 p3 = foldr select ([],[],[],[]) where
 
 
 
---- *  RE ------------------------------------------------------------------------------------------------------------
-
-type instance Annot (RE a) = Int
-
-data RE a
-  = Sym a
-  | Epsilon
-  | Concatenate (RE a) (RE a)
-  | Alternate (RE a) (RE a)
-  | Star (RE a)
-  | Iterate Int (RE a)
-  deriving Show
-
-rex :: Dom () (RE a)
-rex = Dom
-  { ctx         = ()
-  , identity    = const Epsilon
-  , concatenate = const Concatenate
-  , alternate   = const Alternate
-  , closure     = const (\_ -> Star)
-  , iterate     = (\_ x e -> case x of {Just i -> Iterate i e; Nothing -> error "err"})
-  }
 
 
 ppcfg :: (Pretty e, Show v, Show e) => Cfg v e -> String
@@ -260,18 +230,6 @@ instance (Pretty a, Pretty b) => Pretty (Top a b) where
 instance Pretty a => Pretty (Tree a) where
   pretty (Tree t []) = pretty t
   pretty (Tree t ts) = pretty t PP.<$> prettyTrees ts
-
-
-instance Pretty (RE Char) where
-  pretty (Sym c)                 = PP.char c
-  pretty Epsilon                 = PP.char '_'
-  pretty (Concatenate Epsilon a) = pretty a
-  pretty (Concatenate a Epsilon) = pretty a
-  pretty (Concatenate a b)       = pretty a <> pretty b
-  pretty (Alternate a b)         = PP.parens $ pretty a <> PP.char '|' <> pretty b
-  pretty (Star (Sym c))          = PP.char c <> PP.char '*'
-  pretty (Star a)                = PP.parens (PP.pretty a) <> PP.char '*'
-  pretty (Iterate i a)           = PP.brackets $ PP.int i <> PP.space <> PP.pretty a
 
 
 instance {-# Overlapping #-} (Pretty v, Pretty e) => Pretty [Edge v e] where

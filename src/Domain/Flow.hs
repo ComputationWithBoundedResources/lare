@@ -1,24 +1,13 @@
 {-# LANGUAGE TypeFamilies #-}
-module Dep where
+module Domain.Flow where
 
-import           Data.Set             (Set)
-import qualified Data.Set             as S
+import           Data.Set   (Set)
+import qualified Data.Set   as S
 
-import           Prelude              hiding (iterate)
+import           Prelude    hiding (iterate)
 
--- FIXME: when do we need all variables; can we just use somethin like an special id flow?
+import           Domain.Dom
 
-
-data Dom st e = Dom
-  { ctx         :: st
-  , identity    :: st -> e
-  , concatenate :: st -> e -> e -> e
-  , alternate   :: st -> e -> e -> e
-  , closure     :: st -> Maybe (Annot e) -> e -> e
-  , iterate     :: st -> Maybe (Annot e) -> e -> e }
-
-
-type family Annot a :: *
 type instance Annot (F v) = v
 
 type Flow v = Dom [v] (F v)
@@ -36,7 +25,7 @@ flow vs = Dom
 --- * Dependency -----------------------------------------------------------------------------------------------------
 
 data E v =  v :> v deriving (Eq, Ord, Show)
-data D = Identity | Additive | Multiplicative | Exponential 
+data D = Identity | Additive | Multiplicative | Exponential
   deriving (Eq, Ord, Show, Enum)
 
 type U v = (D, E v)
@@ -130,5 +119,4 @@ iterate' vs (Just v) f = correct' v $ lfp f empty f
     | new `isSubsetOf` old = old
     | otherwise            = lfp new' new f
       where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate'` action)
-
 
