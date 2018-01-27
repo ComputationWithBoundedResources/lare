@@ -1,14 +1,18 @@
-{-# LANGUAGE RecordWildCards, TypeOperators, FlexibleInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TypeOperators     #-}
+{-# OPTIONS_GHC -fno-warn-name-shadowing -fno-warn-missing-signatures #-}
 module Lare where
 
-import Data.List ((\\), nub)
-import Data.Function ((&))
-import Data.Monoid ((<>))
+import           Data.Function                ((&))
+import           Data.List                    (nub, (\\))
+import           Data.Monoid                  ((<>))
 
-import Text.PrettyPrint.ANSI.Leijen (Pretty, pretty)
+import           Text.PrettyPrint.ANSI.Leijen (Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
-import Debug.Trace
+import           Debug.Trace
+
 
 
 --- * Cfg ------------------------------------------------------------------------------------------------------------
@@ -46,57 +50,64 @@ data V v = V v | Out v | In v
 
 --- * Program --------------------------------------------------------------------------------------------------------
 
-data Top v e = Top (Cfg (V v) e) [Tree v e]
+data Top a b = Top a [Tree b]
   deriving Show
 
-data Tree v e = Tree
-  { program     :: Cfg (V v) e
-  , loopid      :: Int
-  , outer       :: [v]
-  , inner       :: [v]
-  , cuts        :: [v]
-  , subprograms :: [Tree v e] }
+data Tree a = Tree a [Tree a]
   deriving Show
 
+data Loop v e = Loop
+  { program :: Cfg (V v) e
+  , loopid  :: Int
+  , outer   :: [v]
+  , inner   :: [v]
+  , cuts    :: [v] }
+  deriving Show
 
-draw :: (Show e, Show v) => Top e v -> [String]
-draw (Top p ps) = ("P: " ++ show p)  : drawSubTrees ps where
-  draw' t@Tree{} = ("p:" ++ show (program t) ++ " c: " ++ show (cuts t))  : drawSubTrees (subprograms t)
-  shift first other = zipWith (++) (first : repeat other)
-  drawSubTrees []     = []
-  drawSubTrees [t]    = "|" : shift "`- " "   " (draw' t)
-  drawSubTrees (t:ts) = "|" : shift "+- " "|  " (draw' t) ++ drawSubTrees ts
+type Program v e = Top (Cfg (V v) e) (Loop v e)
+
+
+
+-- draw :: (Show e, Show v) => Top e v -> [String]
+-- draw (Top p ps) = ("P: " ++ show p)  : drawSubTrees ps where
+--   draw' t@Tree{} = ("p:" ++ show (program t) ++ " c: " ++ show (cuts t))  : drawSubTrees (subprograms t)
+--   shift first other = zipWith (++) (first : repeat other)
+--   drawSubTrees []     = []
+--   drawSubTrees [t]    = "|" : shift "`- " "   " (draw' t)
+--   drawSubTrees (t:ts) = "|" : shift "+- " "|  " (draw' t) ++ drawSubTrees ts
 
 
 --- * Attribute Domain -----------------------------------------------------------------------------------------------
 
-class Att e where
-  epsilon   :: e
-  compose   :: e -> e -> e
-  alternate :: e -> e -> e
-  closure   :: e -> e
-  loop      :: Int -> e -> e
+data Dom st e = Dom
+  { ctx    :: st
+  , identity   :: st -> e
+  , concatenate   :: st -> e -> e -> e
+  , alternate :: st -> e -> e -> e
+  , closure   :: st -> e -> e
+  , iterate   :: st -> Int -> e -> e }
 
-compose', alternate' :: Att e => Edge v e -> Edge v e -> Edge v e
-compose'   = lift2 compose
-alternate' = lift2 alternate
+identity' :: Dom st e -> e
+identity' Dom{..} = identity ctx
 
-closure' :: Att e => Edge v e -> Edge v e
-closure' = lift1 closure
+concatenate', alternate' :: Dom st e -> Edge v e -> Edge v e -> Edge v e
+concatenate'   Dom{..} = lift2 (concatenate ctx)
+alternate' Dom{..} = lift2 (alternate ctx)
 
-loop' :: Att e => Int ->  Edge v e -> Edge v e
-loop' i    = lift1 $ loop i
+closure' :: Dom st e -> Edge v e -> Edge v e
+closure' Dom{..} = lift1 (closure ctx)
 
---- * Rip ------------------------------------------------------------------------------------------------------------
+iterate' :: Dom st e -> Int -> Edge v e -> Edge v e
+iterate' Dom{..} = lift1 . iterate ctx
+
+-- --- * Rip ------------------------------------------------------------------------------------------------------------
 
 
 type T v e = Cfg v e -> Cfg v e
 
--- alternate is semigroup
--- compose is monoid?
 
-ripOne :: (Eq v, Att e) => v -> T v e
-ripOne v cfg =
+ripOne :: Eq v => Dom st e -> v -> T v e
+ripOne dom v cfg =
   let
   (vvs, uvs, vws, uws)
     = partition3
@@ -104,13 +115,14 @@ ripOne v cfg =
       (\e -> dst e == v)
       (\e -> src e == v) cfg
   in
-  mergeParallel alternate' $ uws ++ chainAll (combinator vvs) uvs vws
+  mergeParallel (alternate' dom) $ uws ++ chainAll (combinator vvs) uvs vws
 
   where
 
+  compose' = concatenate' dom
 
   combinator [] e1 e2 = e1 `compose'` e2
-  combinator es e1 e2 = e1 `compose'` closure' (foldr1 alternate' es) `compose'` e2
+  combinator es e1 e2 = e1 `compose'` (closure' dom) (foldr1 (alternate' dom) es) `compose'` e2
 
   chainAll k es ds = [ k e1 e2 | e1 <- es, e2 <- ds ]
 
@@ -121,61 +133,63 @@ ripOne v cfg =
     | src e1 == src e2 && dst e1 == dst e2 = k e1 e2: es
     | otherwise                            = e2 : mergeOne k e1 es
 
-rip :: (Eq v, Att e) => [v] -> T v e
-rip vs cfg = foldr ripOne cfg vs
+rip :: Eq v => Dom st e -> [v] -> T v e
+rip dom vs cfg = foldr (ripOne dom) cfg vs
 
-ripWith :: (Eq v, Att e) => Int -> [v] -> T v e
-ripWith i vs cfg = loop' i <$> rip vs cfg
+ripWith :: Eq v => Dom st e -> Int -> [v] -> T v e
+ripWith dom i vs cfg = iterate' dom i <$> (rip dom) vs cfg
 
 
-convert :: (Eq v, Att e, Show v, Show e, Pretty e) => Top v e -> Cfg (V v) e
-convert (Top p ps) =
-  p
-    & mappend (concatMap convert' ps)
+convert dom (Top p ps) = Top p' ps'
+  where
+  ps' = map (convert' dom) ps
+  p' =
+    p
+    & mappend (concatMap (\(Tree es _) -> es) ps')
     & debug "T:append subtrees"
-    & mappend [ edge (V v) epsilon (In v)  | v <- inner ]
-    & mappend [ edge (Out v) epsilon (V v) | v <- inner ]
+    & mappend [ edge (V v)   (identity' dom) (In v)  | v <- inner ]
+    & mappend [ edge (Out v) (identity' dom) (V v) | v <- inner ]
     & debug "T:add inner ports subtrees"
     & debug "T:rip inner ports"
-    & rip [In v  | v <- inner ]
-    & rip [Out v | v <- inner ]
+    & rip dom [In v  | v <- inner ]
+    & rip dom [Out v | v <- inner ]
     & debug "T:rip inner ports"
     & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
     & \g -> traceShow (nodes g) g
     & \g -> traceShow (sources g) g
     & \g -> traceShow (sinks g) g
-    & \g -> rip (nodes g \\ (sources g ++ sinks g)) g
+    & \g -> rip dom (nodes g \\ (sources g ++ sinks g)) g
     & debug "result"
-  where inner = concatMap outer ps
+    where inner = concatMap (\(Tree l _) -> outer l) ps
 
-convert' :: (Eq v, Att e, Show v, Show e, Pretty e) => Tree v e -> Cfg (V v) e
-convert' Tree{..}
-  | null program = []
-  | otherwise    = trace ("> tree\n" ++ ppcfg p ++ "<\n") p
-    where 
-    p = 
-      program
-        & debug "cfg"
-        & mappend (concatMap convert' subprograms)
-        & debug "add subprogram"
-        & mappend [ edge (V v) epsilon (In v)  | v <- inner ]
-        & mappend [ edge (Out v) epsilon (V v) | v <- inner ]
-        & debug "add inner ports"
-        & rip [In v  | v <- inner ]
-        & rip [Out v | v <- inner ]
-        & debug "rip inner nodes"
-        & mappend [ edge (In v) epsilon (V v)  | v <- outer ]
-        & mappend [ edge (V v) epsilon (Out v) | v <- outer ]
-        & debug "add outer ports"
-        & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
-        -- & \g -> loop foldr (\v g' -> trace ("rip\n" ++ ppcfg g') ripOne v g') g (nodes g \\ (sources g ++ sinks g))
-        & \g -> ripWith loopid (nodes g \\ (sources g ++ sinks g)) g
-        & debug "rip internal nodes"
+
+convert' :: (Eq v, Show v, Show e, Pretty e) => Dom st e -> Tree (Loop v e) -> Tree [Edge (V v) e]
+convert' dom (Tree Loop{..} ps) = Tree p' ps'
+  where
+  ps' = map (convert' dom) ps
+  p' =
+    program
+      & debug "cfg"
+      & mappend (concatMap (\(Tree es _) -> es) ps')
+      & debug "add subprogram"
+      & mappend [ edge (V v)   (identity' dom) (In v)  | v <- inner ]
+      & mappend [ edge (Out v) (identity' dom) (V v) | v <- inner ]
+      & debug "add inner ports"
+      & rip dom [In v  | v <- inner ]
+      & rip dom [Out v | v <- inner ]
+      & debug "rip inner nodes"
+      & mappend [ edge (In v) (identity' dom) (V v)  | v <- outer ]
+      & mappend [ edge (V v) (identity' dom) (Out v) | v <- outer ]
+      & debug "add outer ports"
+      & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
+      -- & \g -> loop foldr (\v g' -> trace ("rip\n" ++ ppcfg g') ripOne v g') g (nodes g \\ (sources g ++ sinks g))
+      & \g -> ripWith dom loopid (nodes g \\ (sources g ++ sinks g)) g
+      & debug "rip internal nodes"
 
 debug s cfg = trace ("[" ++ s ++ "]\n" ++ ppcfg cfg) cfg
 
 
---- * Util -----------------------------------------------------------------------------------------------------------
+-- --- * Util -----------------------------------------------------------------------------------------------------------
 
 partition3 :: (a -> Bool) -> (a -> Bool) -> (a -> Bool) -> [a] -> ([a],[a],[a],[a])
 partition3 p1 p2 p3 = foldr select ([],[],[],[]) where
@@ -187,15 +201,15 @@ partition3 p1 p2 p3 = foldr select ([],[],[],[]) where
 
 
 
---- *  RE ------------------------------------------------------------------------------------------------------------
+-- -- --- *  RE ------------------------------------------------------------------------------------------------------------
 
 data RE a
-  = Sym a 
-  | Epsilon 
-  | Concatenate (RE a) (RE a) 
-  | Alternate (RE a) (RE a) 
-  | Star (RE a) 
-  | Loop Int (RE a)
+  = Sym a
+  | Epsilon
+  | Concatenate (RE a) (RE a)
+  | Alternate (RE a) (RE a)
+  | Star (RE a)
+  | Looper Int (RE a)
   deriving Show
 
 instance Pretty (RE Char) where
@@ -207,46 +221,34 @@ instance Pretty (RE Char) where
   pretty (Alternate a b)         = PP.parens $ pretty a <> PP.char '|' <> pretty b
   pretty (Star (Sym c))          = PP.char c <> PP.char '*'
   pretty (Star a)                = PP.parens (PP.pretty a) <> PP.char '*'
-  pretty (Loop i a)              = PP.brackets $ PP.int i <> PP.space <> PP.pretty a
+  pretty (Looper i a)              = PP.brackets $ PP.int i <> PP.space <> PP.pretty a
 
 
--- instance Show a => Show (RE a) where
---   show (Sym a)                 = show a
---   show Epsilon                 = "_"
---   show (Concatenate Epsilon b) = show b
---   show (Concatenate a Epsilon) = show a
---   show (Concatenate a b)       = show a ++ show b
---   show (Alternate Epsilon b)   = "(_|" ++ show b ++ ")"
---   show (Alternate a Epsilon)   = "(" ++ show a ++ "|_)"
---   show (Alternate a b)         = "(" ++ show a ++ "|" ++ show b ++ ")"
---   show (Star a)                = "(" ++ show a ++ show ")*"
---   show (Loop i a)              = "["++ show i ++ " " ++ show a ++ "]"
-
-
-instance Att (RE v) where
-  epsilon   = Epsilon
-  compose   = Concatenate
-  alternate = Alternate
-  closure   = Star
-  loop      = Loop
-
-
+rex :: Dom () (RE a)
+rex = Dom
+  { ctx         = ()
+  , identity    = const Epsilon
+  , concatenate = const Concatenate
+  , alternate   = const Alternate
+  , closure     = const Star
+  , iterate     = const Looper
+  } 
 
 ppcfg :: (Pretty e, Show v, Show e) => Cfg v e -> String
-ppcfg = unlines . map k 
+ppcfg = unlines . map k
   where k e = show (src e) ++ "\t~>\t" ++ show (dst e) ++ "\t\t" ++ (show $ pretty (att e))
 
-ex1 :: Top Char (RE Char)
-ex1 = 
-  Top 
+ex1 =
+  Top
     [a,b,e]
-    [ Tree 
+    [ Tree
+      Loop
       { program     = [c,d]
       , loopid      = 1
       , outer       = ['C','B']
       , inner       = []
-      , cuts        = ['c']
-      , subprograms = [] }
+      , cuts        = ['c'] }
+      []
     ]
   where
     a = edge (V 'I') (Sym 'a') (V 'A')

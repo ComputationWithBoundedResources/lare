@@ -5,6 +5,8 @@ import           Data.Set (Set)
 import qualified Data.Set as S
 import Control.Monad.Reader
 
+-- FIXME: when do we need all variables; can we just use somethin like an special id flow?
+
 --- * Dependency -----------------------------------------------------------------------------------------------------
 
 data E v =  v :> v deriving (Eq, Ord, Show)
@@ -41,7 +43,7 @@ complete ds = F
   , binary = S.fromList bs }
   where
   bs = [ (i :> k, j :> l)
-       | (d1,i :> k) <- ds
+       | (d1, i :> k) <- ds
        , (d2, j :> l) <- ds
        , i /= j || k /= l
        , d1 `max` d2 <= Additive ]
