@@ -296,6 +296,32 @@ ex2 =
     e = edge (V 'C') (F.copy vs 4 3) (V 'F')
     vs = [1..5] :: [Int]
 
+ex3 =
+  Top
+    [a,e]
+    [ Tree
+      Loop
+      { program     = [d]
+      , loopid      = (Var 'X', Sum [(1, Var 'j')])
+      , outer       = [Out 2]
+      , cuts        = [] }
+      [ Tree 
+        Loop 
+          { program     = [b,c]
+          , loopid      = (Var 'X', Sum [(1, Var 'j')])
+          , outer       = [Out 3]
+          , cuts        = [] }
+        []
+      ]
+    ]
+  where
+    a = edge (V 1) (Assignment [ (v, Sum [(1, Var 'n')]) | v <- vs ]) (V 2)
+    b = edge (V 2) (Assignment [ (v, Sum [(1,v)]) | v <- vs ]) (V 3)
+    c = edge (V 3) (Assignment [ (v, Sum [(1,v)]) | v <- vs ]) (V 2)
+    d = edge (V 3) (Assignment [ (v, Sum [(1,v)]) | v <- vs ]) (V 2)
+    e = edge (V 2) (Assignment [ (v, Sum [(1,v)]) | v <- vs ]) (V 4)
+    vs = [Var 'n', Var 'i', Var 'j']
+
 --- * Pretty ---------------------------------------------------------------------------------------------------------
 
 render :: Pretty a => a -> String
