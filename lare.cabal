@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Lare, Domain.Dom, Domain.RE, Domain.Flow
+  exposed-modules:     Lare.Analysis, Lare.Domain, Lare.RE, Lare.Flow
   build-depends:       base >= 4.7 && < 5, containers, ansi-wl-pprint
   default-language:    Haskell2010
   ghc-options:
