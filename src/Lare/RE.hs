@@ -28,13 +28,14 @@ rex = Dom
   { ctx         = ()
   , identity    = const Epsilon
   , concatenate = const Concatenate
+  , concatenate1 = undefined
+  , concatenate2 = undefined
   , alternate   = const Alternate
   , closure     = const (\_ -> Star)
   , iterate     = (\_ x e -> case x of {Just i -> Iterate i e; Nothing -> error "err"})
   }
 
-
-instance Pretty (RE Char) where
+instance {-# Overlapping #-} Pretty (RE Char) where
   pretty (Sym c)                 = PP.char c
   pretty Epsilon                 = PP.char '_'
   pretty (Concatenate Epsilon a) = pretty a
@@ -42,6 +43,17 @@ instance Pretty (RE Char) where
   pretty (Concatenate a b)       = pretty a <> pretty b
   pretty (Alternate a b)         = PP.parens $ pretty a <> PP.char '|' <> pretty b
   pretty (Star (Sym c))          = PP.char c <> PP.char '*'
+  pretty (Star a)                = PP.parens (PP.pretty a) <> PP.char '*'
+  pretty (Iterate i a)           = PP.brackets $ PP.int i <> PP.space <> PP.pretty a
+
+instance Pretty c => Pretty (RE c) where
+  pretty (Sym c)                 = pretty c
+  pretty Epsilon                 = PP.char '_'
+  pretty (Concatenate Epsilon a) = pretty a
+  pretty (Concatenate a Epsilon) = pretty a
+  pretty (Concatenate a b)       = pretty a <> pretty b
+  pretty (Alternate a b)         = PP.parens $ pretty a <> PP.char '|' <> pretty b
+  pretty (Star (Sym c))          = PP.pretty c <> PP.char '*'
   pretty (Star a)                = PP.parens (PP.pretty a) <> PP.char '*'
   pretty (Iterate i a)           = PP.brackets $ PP.int i <> PP.space <> PP.pretty a
 

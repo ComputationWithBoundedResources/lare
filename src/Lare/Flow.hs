@@ -12,21 +12,23 @@ import Data.Monoid ((<>))
 
 import           Prelude    hiding (iterate)
 
-import           Lare.Domain
+import qualified Lare.Domain as D
 
 
-type instance Annot (F v) = (v, [U v])
 
-type Flow v = Dom [v] (F v)
+type Flow v = D.Dom [v] (F v)
+type instance D.Annot (F v) = (v, [U v])
 
 flow :: Ord v => [v] -> Flow v
-flow vs = Dom
-  { ctx         = vs
-  , identity    = identity'
-  , concatenate = const concatenate'
-  , alternate   = const alternate'
-  , closure     = closure'
-  , iterate     = iterate' }
+flow vs = D.Dom
+  { D.ctx          = vs
+  , D.identity     = identity'
+  , D.concatenate  = const concatenate'
+  , D.concatenate1 = const concatenate'
+  , D.concatenate2 = rip
+  , D.alternate    = const alternate'
+  , D.closure      = closure'
+  , D.iterate      = iterate' }
 
 
 --- * Dependency -----------------------------------------------------------------------------------------------------
@@ -81,9 +83,9 @@ copy vs r s = complete $ (Identity, s :> r): [ (Identity, v :> v) | v <- vs, v /
 plus :: Ord v => [v] -> v -> v -> v -> F v
 plus vs r s t = complete $
   let ids =  [ (Identity, v :> v) | v <- vs, v /= r ] in
-  if s /= t
-  then (Additive, s :> r): (Multiplicative, t :> r): ids
-  else (Multiplicative, s :> r) : ids
+  if s == t
+  then (Multiplicative, s :> r) : ids
+  else (Additive, s :> r): (Additive, t :> r): ids
 
 mult :: Ord v => [v] -> v -> v -> v -> F v
 mult vs r s t = complete $
@@ -125,7 +127,7 @@ concatenate' f1 f2 = F
   { unary =
       S.fromList $
         [ (d1 `max` d2   , i :> k) | (d1, i :> x) <- us1, (d2, z :> k) <- us2, x == z ] ++
-        [ (Multiplicative, i :> k) | (i :> x, i' :> x') <- bs1, i == i', (z :> k, z' :> k') <- bs2, k == k', x == z && x' == z']
+        [ (Additive, i :> k) | (i :> x, i' :> x') <- bs1, i == i', (z :> k, z' :> k') <- bs2, k == k', x == z && x' == z']
 
   , binary =
       S.fromList $
@@ -141,16 +143,29 @@ concatenate' f1 f2 = F
 closure' _ _ f = f
 
 correct' :: Ord v => v -> F v -> F v
-correct' v f = f `union` f { unary = unary' }
-  where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
+correct' v f = f
+-- correct' v f = f `union` f { unary = unary' }
+--   where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
+
+rip :: Ord v => [v] -> Maybe (v, [U v]) -> [F v] -> F v -> F v -> F v
+rip vs Nothing [] e1 e2         = e1 `concatenate'` e2
+rip vs Nothing vvs e1 e2        = e1 `concatenate'` (lfp vs $ foldr1 alternate' vvs) `concatenate'` e2
+rip vs (Just (l,_)) vvs   e1 e2 = rip' vs l vvs e1 e2
+
+rip' :: Ord v => [v] -> v -> [F v] -> F v -> F v -> F v
+rip' vs _ []  uv vw = uv `concatenate'` vw
+rip' vs l vvs uv vw = correct' l $ lfp vs $ uv `concatenate'` vv `concatenate'` vw
+  where vv = correct' l $ lfp vs $ foldr1 alternate' vvs
+
+lfp :: Ord v => [v] -> F v -> F v
+lfp vs f = go f f empty where
+  go f new old
+    | new `isSubsetOf` old = old
+    | otherwise            = go f new' new
+      where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate'` f)
 
 iterate' _  Nothing f = error "oh no"
-iterate' vs (Just (v,_)) f = correct' v $ lfp f empty f
-  where
-  lfp new old action
-    | new `isSubsetOf` old = old
-    | otherwise            = lfp new' new f
-      where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate'` action)
+iterate' vs (Just (v,_)) f = correct' v $ lfp vs f
 
 
 instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where
@@ -158,9 +173,10 @@ instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where
     ppd Identity       = PP.char '='
     ppd Additive       = PP.char '+'
     ppd Multiplicative = PP.char '*'
-    ppd Exponential    = PP.char '?'
+    ppd Exponential    = PP.char '^'
 
 
-instance Pretty v => Pretty (F v) where
-  pretty F{..} = PP.align $ PP.vcat [ pretty u | u <- S.toList unary]  
+instance (Eq v, Pretty v) => Pretty (F v) where
+  -- pretty F{..} = PP.align $ PP.vcat [ pretty u | u <- S.toList unary]  
+  pretty F{..} = PP.list [ pretty u | u@(d, i:> j) <- S.toList unary, d /= Identity || i/=j ] 
 

@@ -55,6 +55,10 @@ sinks cfg = nub (fmap dst cfg) \\ nub (fmap src cfg)
 data V v = V v | Out v | In v
   deriving (Eq, Ord, Show)
 
+unVar :: V v -> v
+unVar (V v)   = v
+unVar (Out v) = v
+unVar (In v)  = v
 
 --- * Program --------------------------------------------------------------------------------------------------------
 
@@ -110,8 +114,9 @@ ripOne dom a v cfg =
 
   compose' = concatenate' dom
 
-  combinator [] e1 e2 = e1 `compose'` e2
-  combinator es e1 e2 = e1 `compose'` (closure' dom a) (foldr1 (alternate' dom) es) `compose'` e2
+  combinator es = lift2 (concatenate2 dom (ctx dom) a [ att e | e <- es ])
+  -- combinator [] e1 e2 = e1 `compose'` e2
+  -- combinator es e1 e2 = e1 `compose'` (closure' dom a) (foldr1 (alternate' dom) es) `compose'` e2
 
   chainAll k es ds = [ k e1 e2 | e1 <- es, e2 <- ds ]
 
@@ -129,6 +134,8 @@ ripWith :: Eq v => Dom st e -> Maybe (Annot e) -> [v] -> T v e
 ripWith dom a vs cfg = iterate' dom a <$> (rip dom a) vs cfg
 
 
+-- FIXME: add inner
+-- use epsilon for outer part; but use predecessor for inner part
 
 convert :: (Eq v, Pretty e, Show v, Show e) =>
   Dom st e
@@ -141,20 +148,22 @@ convert dom (Top p ps) = Top p' ps'
     p
     & mappend (concatMap (\(Tree es _) -> es) ps')
     & debug "T:append subtrees"
-    & mappend [ edge (V v)   (identity' dom) (In v)  | Out v <- inner ps ]
-    & mappend [ edge (Out v) (identity' dom) (V v) | Out v <- inner ps ]
+    & mappend [ edge (V v)   (identity' dom) (In v)  | e <- Out v <- inner ps ]
+    & mappend [ edge (Out v) (identity' dom) (V v)   | Out v <- inner ps ]
     & debug "T:add inner ports subtrees"
-    & debug "T:rip inner ports"
-    & rip dom Nothing [In v  | Out v <- inner ps ]
-    & rip dom Nothing [Out v | Out v <- inner ps ]
-    & debug "T:rip inner ports"
-    & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
-    & \g -> traceShow (nodes g) g
-    & \g -> traceShow (sources g) g
-    & \g -> traceShow (sinks g) g
-    & \g -> rip dom Nothing (nodes g \\ (sources g ++ sinks g)) g
+    -- & rip dom Nothing [In v  | Out v <- inner ps ]
+    -- & debug "T:rip inner In ports"
+    -- & rip dom Nothing [Out v | Out v <- inner ps ]
+    -- & debug "T:rip inner Out ports"
+    & \g -> traceShow (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p]) g
+    & \g -> traceShow (nodes g \\ (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p])) g
+    & \g -> rip dom Nothing (nodes g \\ (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p])) g
+    & debug "T:rip internal ports"
     & debug "result"
+-- FIXME
 
+-- p 27 source sinks; cin -> cout?
+-- if v is final in p then vout; if v is initial in p then pin
 
 convert' :: (Show e, Show v, Pretty e, Eq v) =>
   Dom st e -> Tree (Loop (V v) e) -> Tree [Edge (V v) e]
@@ -231,11 +240,6 @@ withAssignment vs a@(Assignment as) = F.complete $ idep ++ assign
   assign = fromAssignment a
   
 
--- data Loop v e = Loop
---   { program :: [Edge v e]
---   , loopid  :: Annot e
---   , outer   :: [v]
---   , cuts    :: [Edge v e] }
 
 --- * Util -----------------------------------------------------------------------------------------------------------
 
@@ -253,27 +257,60 @@ partition3 p1 p2 p3 = foldr select ([],[],[],[]) where
 
 ppcfg :: (Pretty e, Show v, Show e) => Cfg v e -> String
 ppcfg = unlines . map k
-  where k e = show (src e) ++ "\t~>\t" ++ show (dst e) ++ "\t\t" ++ (show $ pretty (att e))
+  where k e = show (src e) ++ "\t~>\t" ++ show (dst e) ++ "\t\n" ++ (render $ PP.indent 2 $ pretty (att e))
 
 
-ex1 :: Program Char (RE Char)
+ex1 :: Program Char (RE String)
 ex1 =
   Top
     [a,b,e]
     [ Tree
       Loop
       { program     = [c,d]
-      , loopid      = 1
+      , loopid      = 5
       , outer       = [Out 'C', Out 'B']
       , cuts        = [] }
       []
     ]
   where
-    a = edge (V 'I') (Sym 'a') (V 'A')
-    b = edge (V 'A') (Sym 'b') (V 'B')
-    d = edge (V 'C') (Sym 'd') (V 'B')
-    c = edge (V 'B') (Sym 'c') (V 'C')
-    e = edge (V 'C') (Sym 'e') (V 'F')
+    a = edge (V 'I') (Sym "skip;") (V 'A')
+    b = edge (V 'A') (Sym "x1:=x3;") (V 'B')
+    c = edge (V 'B') (Sym "x2:=x3;") (V 'C')
+    d = edge (V 'C') (Sym "x3:=x3+x2;") (V 'B')
+    e = edge (V 'C') (Sym "x4:=x3;") (V 'F')
+
+runex1 = convert (rex) ex1
+
+ex1' :: Program Char (RE String)
+ex1' =
+  Top
+    [i,f,a,b,c,d,e]
+    [ Tree
+      Loop
+      { program     = [a,b,c,d,e]
+      , loopid      = 1
+      , outer       = [Out 'A']
+      , cuts        = [] }
+      [ Tree
+      Loop
+      { program     = [b,c,d]
+      , loopid      = 2
+      , outer       = [Out 'C', Out 'B']
+      , cuts        = [] }
+      []
+      ]
+    ]
+  where
+    i = edge (V 'I') (Sym "s") (V 'A')
+    f = edge (V 'A') (Sym "f") (V 'F')
+
+    a = edge (V 'A') (Sym "a") (V 'B')
+    b = edge (V 'B') (Sym "b") (V 'C')
+    c = edge (V 'C') (Sym "c") (V 'D')
+    d = edge (V 'D') (Sym "d") (V 'B')
+    e = edge (V 'B') (Sym "e") (V 'A')
+
+runex1' = convert (rex) ex1'
 
 runex2 = convert (F.flow [1..5]) ex2
 
@@ -295,6 +332,7 @@ ex2 =
     d = edge (V 'C') (F.plus vs 3 1 2) (V 'B')
     e = edge (V 'C') (F.copy vs 4 3) (V 'F')
     vs = [1..5] :: [Int]
+
 
 ex3 =
   Top
@@ -325,7 +363,8 @@ ex3 =
 --- * Pretty ---------------------------------------------------------------------------------------------------------
 
 render :: Pretty a => a -> String
-render = show . pretty
+-- render = flip PP.displayS "" . PP.renderCompact . pretty
+render = flip PP.displayS "" . (PP.renderPretty 0.5 240) . pretty
 
 prettyTrees [] = PP.empty
 prettyTrees ts = (PP.vcat $ zipWith (<>) (repeat $ PP.text "+ ") (map (PP.align . pretty) ts))
@@ -346,7 +385,9 @@ instance (Pretty v, Pretty e) => Pretty (Edge v e) where
   pretty Edge{..} = pretty src <> PP.string "\t ~> \t" <> pretty dst PP.<$$> PP.indent 2 (pretty att)
 
 instance Pretty v => Pretty (V v) where
-  pretty (V v)   = pretty v
-  pretty (In v)  = PP.char '>' <> pretty v
-  pretty (Out v) = PP.char '<' <> pretty v
+  pretty v = case v of
+    (V v)   -> pp v
+    (In v)  -> pp v
+    (Out v) -> pp v
+    where pp = PP.bold . pretty
 
