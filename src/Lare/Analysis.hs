@@ -1,8 +1,8 @@
-{-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TypeFamilies      #-}
 {-# LANGUAGE TypeOperators     #-}
-{-# LANGUAGE TypeFamilies     #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing -fno-warn-missing-signatures #-}
 module Lare.Analysis where
 
@@ -10,15 +10,18 @@ import           Data.Function                ((&))
 import           Data.List                    (nub, (\\))
 import           Data.Monoid                  ((<>))
 
+import           Data.Map.Strict              (Map)
+import qualified Data.Map.Strict              as M
 import           Text.PrettyPrint.ANSI.Leijen (Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           Debug.Trace
 
-import Lare.Domain
-import Lare.RE
-import           Lare.Flow (F, E ((:>)))
-import qualified Lare.Flow as F
+
+import           Lare.Domain
+import           Lare.Flow                    (E ((:>)), (<=.),(<+.),(<*.), F)
+import qualified Lare.Flow                    as F
+import           Lare.RE
 
 
 
@@ -115,8 +118,6 @@ ripOne dom a v cfg =
   compose' = concatenate' dom
 
   combinator es = lift2 (concatenate2 dom (ctx dom) a [ att e | e <- es ])
-  -- combinator [] e1 e2 = e1 `compose'` e2
-  -- combinator es e1 e2 = e1 `compose'` (closure' dom a) (foldr1 (alternate' dom) es) `compose'` e2
 
   chainAll k es ds = [ k e1 e2 | e1 <- es, e2 <- ds ]
 
@@ -137,6 +138,7 @@ ripWith dom a vs cfg = iterate' dom a <$> (rip dom a) vs cfg
 -- FIXME: add inner
 -- use epsilon for outer part; but use predecessor for inner part
 
+
 convert :: (Eq v, Pretty e, Show v, Show e) =>
   Dom st e
   -> Top [Edge (V v) e] (Loop (V v) e)
@@ -148,16 +150,23 @@ convert dom (Top p ps) = Top p' ps'
     p
     & mappend (concatMap (\(Tree es _) -> es) ps')
     & debug "T:append subtrees"
-    & mappend [ edge (V v)   (identity' dom) (In v)  | e <- Out v <- inner ps ]
-    & mappend [ edge (Out v) (identity' dom) (V v)   | Out v <- inner ps ]
+    --
+    -- & mappend [ e { dst = In v}  | e <- p, Out v <- inner ps, V v == dst e ]
+    -- & mappend [ e { src = Out v}  | e <- p, Out v <- inner ps, V v == src e ]
+    & mappend [ edge (V v)   (identity' dom) (In v) | Out v <- inner ps ]
+    & mappend [ edge (Out v) (identity' dom) (V v) | Out v <- inner ps ]
+
     & debug "T:add inner ports subtrees"
-    -- & rip dom Nothing [In v  | Out v <- inner ps ]
+    & rip dom Nothing [In v  | Out v <- inner ps ]
     -- & debug "T:rip inner In ports"
-    -- & rip dom Nothing [Out v | Out v <- inner ps ]
+    & rip dom Nothing [Out v | Out v <- inner ps ]
     -- & debug "T:rip inner Out ports"
-    & \g -> traceShow (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p]) g
-    & \g -> traceShow (nodes g \\ (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p])) g
-    & \g -> rip dom Nothing (nodes g \\ (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p])) g
+    -- & \g -> traceShow (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p]) g
+    -- & \g -> traceShow (nodes g \\ (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p])) g
+    -- & \g -> rip dom Nothing (nodes g \\ (sources g ++ sinks g ++ [ In $ unVar v | v <- sources p] ++ [Out $ unVar v | v <- sinks p])) g
+    & \g -> traceShow ((sources g ++ sinks g)) g
+    & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
+    & \g -> rip dom Nothing (nodes g \\ (sources g ++ sinks g)) g
     & debug "T:rip internal ports"
     & debug "result"
 -- FIXME
@@ -193,7 +202,7 @@ debug s cfg = trace ("[" ++ s ++ "]\n" ++ ppcfg cfg) cfg
 
 --- * Intermediate Representation ------------------------------------------------------------------------------------
 
- 
+
 data Var v = Var v | Ann v | Counter | K | Huge deriving (Eq, Ord, Show)
 
 
@@ -213,16 +222,18 @@ type instance Annot (Assignment v) = (v, Bound v)
 toFlow' vs t = go t
   where
     k es = [ e { att = withAssignment vs (att e) } | e <- es ]
-    g (v, Unknown) = (v, [(F.Identity, Huge :> Counter)])
-    g (v, Sum bs)  = (v, (F.Additive, Counter :> Counter) : [ (F.fromK k, v :> b) | (k,b) <- bs ])
-    go (Tree Loop{..} ts) = 
+    g (v, Unknown) = (v, [(F.Identity, Huge <=. Huge)])
+    -- g (v, Sum [b]) = (v, (F.Identity, Counter :> Counter) : [ (F.fromK k, v :> b) | (k,b) <- bs ])
+    -- g (v, Sum bs)  = (v, (F.Additive, Counter :> Counter) : [ (F.fromK k, v :> b) | (k,b) <- bs ])
+    go (Tree Loop{..} ts) =
       Tree
         Loop
-          { program = k program 
-          , loopid  = g loopid
+          { program = k program
+          , loopid  = undefined
           , outer   = outer
           , cuts    = k cuts }
         (map go ts)
+    -- counter = [ F.Additive, Counter :> Counter, F.Additive K :> Counter ]
 
 
 fromAssignment :: Assignment (Var v) -> [F.U (Var v)]
@@ -238,7 +249,7 @@ withAssignment vs a@(Assignment as) = F.complete $ idep ++ assign
   where
   idep   = [ (F.Identity, v :> v) | v <- (vs \\ [ v  | (v,_) <- as ]) ]
   assign = fromAssignment a
-  
+
 
 
 --- * Util -----------------------------------------------------------------------------------------------------------
@@ -343,8 +354,8 @@ ex3 =
       , loopid      = (Var 'X', Sum [(1, Var 'j')])
       , outer       = [Out 2]
       , cuts        = [] }
-      [ Tree 
-        Loop 
+      [ Tree
+        Loop
           { program     = [b,c]
           , loopid      = (Var 'X', Sum [(1, Var 'j')])
           , outer       = [Out 3]

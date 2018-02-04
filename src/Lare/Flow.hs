@@ -38,6 +38,11 @@ data E v =  v :> v deriving (Eq, Ord, Show)
 data D = Identity | Additive | Multiplicative | Exponential
   deriving (Eq, Ord, Show, Enum)
 
+v <=. w = (Identity, v :> w)
+v <+. w = (Additive, v :> w)
+v <*. w = (Multiplicative, v :> w)
+v <^. w = (Exponential, v :> w)
+
 type U v = (D, E v)
 type B v = (E v, E v)
 
@@ -143,9 +148,8 @@ concatenate' f1 f2 = F
 closure' _ _ f = f
 
 correct' :: Ord v => v -> F v -> F v
-correct' v f = f
--- correct' v f = f `union` f { unary = unary' }
---   where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
+correct' v f = f `union` f { unary = unary' }
+  where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
 
 rip :: Ord v => [v] -> Maybe (v, [U v]) -> [F v] -> F v -> F v -> F v
 rip vs Nothing [] e1 e2         = e1 `concatenate'` e2
