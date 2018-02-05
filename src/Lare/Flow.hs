@@ -17,7 +17,6 @@ import qualified Lare.Domain as D
 
 
 type Flow v = D.Dom [v] (F v)
-type instance D.Annot (F v) = (v, [U v])
 
 flow :: Ord v => [v] -> Flow v
 flow vs = D.Dom
@@ -38,10 +37,10 @@ data E v =  v :> v deriving (Eq, Ord, Show)
 data D = Identity | Additive | Multiplicative | Exponential
   deriving (Eq, Ord, Show, Enum)
 
-v <=. w = (Identity, v :> w)
-v <+. w = (Additive, v :> w)
-v <*. w = (Multiplicative, v :> w)
-v <^. w = (Exponential, v :> w)
+v <=. w = (Identity, w :> v)
+v <+. w = (Additive, w :> v)
+v <*. w = (Multiplicative, w :> v)
+v <^. w = (Exponential, w :> v)
 
 type U v = (D, E v)
 type B v = (E v, E v)
@@ -99,7 +98,7 @@ mult vs r s t = complete $
 
 fromK :: Int -> D
 fromK k
-  | k < 0     = fromK k
+  | k < 0     = fromK (-k)
   | k == 0    = Identity
   | k == 1    = Additive
   | otherwise = Multiplicative
@@ -151,10 +150,10 @@ correct' :: Ord v => v -> F v -> F v
 correct' v f = f `union` f { unary = unary' }
   where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
 
-rip :: Ord v => [v] -> Maybe (v, [U v]) -> [F v] -> F v -> F v -> F v
-rip vs Nothing [] e1 e2         = e1 `concatenate'` e2
-rip vs Nothing vvs e1 e2        = e1 `concatenate'` (lfp vs $ foldr1 alternate' vvs) `concatenate'` e2
-rip vs (Just (l,_)) vvs   e1 e2 = rip' vs l vvs e1 e2
+rip :: Ord v => [v] -> Maybe (F v) -> [F v] -> F v -> F v -> F v
+rip vs _ [] e1 e2         = e1 `concatenate'` e2
+rip vs _ vvs e1 e2        = e1 `concatenate'` (lfp vs $ foldr1 alternate' vvs) `concatenate'` e2
+rip vs ff vvs   e1 e2 = rip' vs l vvs e1 e2 where l = undefined
 
 rip' :: Ord v => [v] -> v -> [F v] -> F v -> F v -> F v
 rip' vs _ []  uv vw = uv `concatenate'` vw
@@ -168,8 +167,7 @@ lfp vs f = go f f empty where
     | otherwise            = go f new' new
       where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate'` f)
 
-iterate' _  Nothing f = error "oh no"
-iterate' vs (Just (v,_)) f = correct' v $ lfp vs f
+iterate' vs ff f = correct' v $ lfp vs f where v = undefined
 
 
 instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where

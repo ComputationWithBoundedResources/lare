@@ -24,16 +24,16 @@ data RE a
   deriving Show
 
 rex :: Dom () (RE a)
-rex = Dom
-  { ctx         = ()
-  , identity    = const Epsilon
-  , concatenate = const Concatenate
-  , concatenate1 = undefined
-  , concatenate2 = undefined
-  , alternate   = const Alternate
-  , closure     = const (\_ -> Star)
-  , iterate     = (\_ x e -> case x of {Just i -> Iterate i e; Nothing -> error "err"})
-  }
+rex = undefined 
+  -- { ctx         = ()
+  -- , identity    = const Epsilon
+  -- , concatenate = const Concatenate
+  -- , concatenate1 = undefined
+  -- , concatenate2 = undefined
+  -- , alternate   = const Alternate
+  -- , closure     = const (\_ -> Star)
+  -- , iterate     = (\_ x e -> case x of {Just i -> Iterate i e; Nothing -> error "err"})
+  -- }
 
 instance {-# Overlapping #-} Pretty (RE Char) where
   pretty (Sym c)                 = PP.char c
