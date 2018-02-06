@@ -23,7 +23,8 @@ flow vs = D.Dom
   , D.unity     = unity
   , D.rip       = rip
   , D.ripWith   = ripWith
-  , D.alternate = const alternate }
+  , D.alternate = const alternate
+  , D.closeWith = const closeWith }
 
 
 --- * Dependency -----------------------------------------------------------------------------------------------------
@@ -46,7 +47,7 @@ type B v = (E v, E v)
 data F v = F
   { unary  :: Set (U v)
   , binary :: Set (B v) }
-  deriving Show
+  deriving (Eq, Ord, Show)
 
 
 empty :: F v
@@ -124,10 +125,11 @@ lfp vs f = go f f empty where
       where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate` f)
 
 correctWith :: Ord v => F v -> F v -> F v
-correctWith F{..} f = correct (k $ S.toList unary) f where
+correctWith F{..} f = correct (k $ filter (not . isUnit) $ S.toList unary) f where
   k ((_, _ :> v):ds)
     | all (\(_,_ :> w) -> w == v) ds = v
   k _               = error "oh noh"
+  isUnit (k, v :> w) = k == Identity && v == w
 
 correct :: Ord v => v -> F v -> F v
 correct v f = f `union` f { unary = unary' }
@@ -158,6 +160,9 @@ rip :: Ord v => [v] -> [F v] -> F v -> F v -> F v
 rip vs []  uv vw = uv `concatenate` vw
 rip vs vvs uv vw = uv `concatenate` (lfp vs $ foldr1 alternate vvs) `concatenate` vw
 
+closeWith :: Ord v => F v -> F v -> F v
+closeWith f1 f2 = f1 `concatenate` f2
+
 ripWith :: Ord v => [v] -> F v -> [F v] -> F v -> F v -> F v
 ripWith vs _ []  uv vw = uv `concatenate` vw
 ripWith vs l vvs uv vw = correctWith l $ lfp vs $ uv `concatenate` vv `concatenate` vw
@@ -169,8 +174,9 @@ alternate f1 f2 = F
   , binary = binary f1 `S.union` binary f2}
 
 
+
 instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where
-  pretty (d, i :> j) = pretty i <> PP.text " ~" <> ppd d <> PP.text "~> " <> pretty j where
+  pretty (d, i :> j) = pretty i <> PP.text " ~" <> ppd d <> PP.text "> " <> pretty j where
     ppd Identity       = PP.char '='
     ppd Additive       = PP.char '+'
     ppd Multiplicative = PP.char '*'
