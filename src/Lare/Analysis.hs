@@ -32,9 +32,6 @@ data Edge v e = Edge
 edge :: v -> e -> v -> Edge v e
 edge src att dst = Edge { src = src, att = att, dst = dst }
 
-lift1 :: (e1 -> e2) -> Edge v e1 -> Edge v e2
-lift1 k e = edge (src e) (k $ att e) (dst e)
-
 lift2 :: (e1 -> e2 -> e) -> Edge v e1 -> Edge v e2 -> Edge v e
 lift2 k e1 e2 = edge (src e1) (att e1 `k` att e2) (dst e2)
 
@@ -91,8 +88,8 @@ concatenate' Dom{..} = lift2 (concatenate ctx)
 alternate' Dom{..}   = lift2 (alternate ctx)
 
 closure', iterate' :: Dom st e -> e -> Edge v e -> Edge v e
-closure' Dom{..} a e = lift1 (closure ctx a) e
-iterate' Dom{..} a e = lift1 (iterate ctx a) e
+closure' Dom{..} a e = fmap (closure ctx a) e
+iterate' Dom{..} a e = fmap (iterate ctx a) e
 
 -- --- * Rip ------------------------------------------------------------------------------------------------------------
 

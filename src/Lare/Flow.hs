@@ -1,6 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ViewPatterns #-}
 module Lare.Flow where
 
 import           Data.Set   (Set)
@@ -10,8 +11,6 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import Data.Monoid ((<>))
 
 
-import           Prelude    hiding (iterate)
-
 import qualified Lare.Domain as D
 
 
@@ -20,14 +19,11 @@ type Flow v = D.Dom [v] (F v)
 
 flow :: Ord v => [v] -> Flow v
 flow vs = D.Dom
-  { D.ctx          = vs
-  , D.identity     = identity'
-  , D.concatenate  = const concatenate'
-  , D.concatenate1 = const concatenate'
-  , D.concatenate2 = rip
-  , D.alternate    = const alternate'
-  , D.closure      = closure'
-  , D.iterate      = iterate' }
+  { D.ctx       = vs
+  , D.unity     = unity
+  , D.rip       = rip
+  , D.ripWith   = ripWith
+  , D.alternate = const alternate }
 
 
 --- * Dependency -----------------------------------------------------------------------------------------------------
@@ -36,6 +32,8 @@ flow vs = D.Dom
 data E v =  v :> v deriving (Eq, Ord, Show)
 data D = Identity | Additive | Multiplicative | Exponential
   deriving (Eq, Ord, Show, Enum)
+
+target (_, _ :> v) = v
 
 v <=. w = (Identity, w :> v)
 v <+. w = (Additive, w :> v)
@@ -79,7 +77,7 @@ complete ds = F
        , d1 `max` d2 <= Additive ]
 
 skip :: Ord v => [v] -> F v
-skip = identity'
+skip = unity
 
 copy :: Ord v => [v] -> v -> v -> F v
 copy vs r s = complete $ (Identity, s :> r): [ (Identity, v :> v) | v <- vs, v /= r ]
@@ -118,16 +116,25 @@ fromK k
 
 -- --- * Operations -----------------------------------------------------------------------------------------------------
 
-identity' :: Ord v => [v] -> F v
-identity' = complete . idep
+lfp :: Ord v => [v] -> F v -> F v
+lfp vs f = go f f empty where
+  go f new old
+    | new `isSubsetOf` old = old
+    | otherwise            = go f new' new
+      where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate` f)
 
-alternate' :: Ord v => F v -> F v -> F v
-alternate' f1 f2 = F
-  { unary  = unary f1  `S.union` unary f2
-  , binary = binary f1 `S.union` binary f2}
+correctWith :: Ord v => F v -> F v -> F v
+correctWith F{..} f = correct (k $ S.toList unary) f where
+  k ((_, _ :> v):ds)
+    | all (\(_,_ :> w) -> w == v) ds = v
+  k _               = error "oh noh"
 
-concatenate' :: Ord v => F v -> F v -> F v
-concatenate' f1 f2 = F
+correct :: Ord v => v -> F v -> F v
+correct v f = f `union` f { unary = unary' }
+  where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
+
+concatenate :: Ord v => F v -> F v -> F v
+concatenate f1 f2 = F
   { unary =
       S.fromList $
         [ (d1 `max` d2   , i :> k) | (d1, i :> x) <- us1, (d2, z :> k) <- us2, x == z ] ++
@@ -144,30 +151,22 @@ concatenate' f1 f2 = F
     bs1 = S.toList (binary f1)
     bs2 = S.toList (binary f2)
 
-closure' _ _ f = f
+unity :: Ord v => [v] -> F v
+unity = complete . idep
 
-correct' :: Ord v => v -> F v -> F v
-correct' v f = f `union` f { unary = unary' }
-  where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
+rip :: Ord v => [v] -> [F v] -> F v -> F v -> F v
+rip vs []  uv vw = uv `concatenate` vw
+rip vs vvs uv vw = uv `concatenate` (lfp vs $ foldr1 alternate vvs) `concatenate` vw
 
-rip :: Ord v => [v] -> Maybe (F v) -> [F v] -> F v -> F v -> F v
-rip vs _ [] e1 e2         = e1 `concatenate'` e2
-rip vs _ vvs e1 e2        = e1 `concatenate'` (lfp vs $ foldr1 alternate' vvs) `concatenate'` e2
-rip vs ff vvs   e1 e2 = rip' vs l vvs e1 e2 where l = undefined
+ripWith :: Ord v => [v] -> F v -> [F v] -> F v -> F v -> F v
+ripWith vs _ []  uv vw = uv `concatenate` vw
+ripWith vs l vvs uv vw = correctWith l $ lfp vs $ uv `concatenate` vv `concatenate` vw
+  where vv = correctWith l $ lfp vs $ foldr1 alternate vvs
 
-rip' :: Ord v => [v] -> v -> [F v] -> F v -> F v -> F v
-rip' vs _ []  uv vw = uv `concatenate'` vw
-rip' vs l vvs uv vw = correct' l $ lfp vs $ uv `concatenate'` vv `concatenate'` vw
-  where vv = correct' l $ lfp vs $ foldr1 alternate' vvs
-
-lfp :: Ord v => [v] -> F v -> F v
-lfp vs f = go f f empty where
-  go f new old
-    | new `isSubsetOf` old = old
-    | otherwise            = go f new' new
-      where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate'` f)
-
-iterate' vs ff f = correct' v $ lfp vs f where v = undefined
+alternate :: Ord v => F v -> F v -> F v
+alternate f1 f2 = F
+  { unary  = unary f1  `S.union` unary f2
+  , binary = binary f1 `S.union` binary f2}
 
 
 instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where

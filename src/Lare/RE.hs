@@ -12,8 +12,6 @@ import           Prelude                      hiding (iterate)
 import           Lare.Domain
 
 
-type instance Annot (RE a) = Int
-
 data RE a
   = Sym a
   | Epsilon
