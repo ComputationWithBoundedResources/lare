@@ -45,13 +45,17 @@ type U v = (D, E v)
 type B v = (E v, E v)
 
 data F v = F
-  { unary  :: Set (U v)
+  { annot  :: Maybe v
+  , unary  :: Set (U v)
   , binary :: Set (B v) }
   deriving (Eq, Ord, Show)
 
 
 empty :: F v
-empty = F { unary = S.empty, binary = S.empty}
+empty = F { annot = Nothing, unary = S.empty, binary = S.empty}
+
+withAnnotation :: F v -> v -> F v
+withAnnotation f v = f { annot = Just v } 
 
 isSubsetOf :: Ord v => F v -> F v -> Bool
 isSubsetOf f1 f2 =
@@ -60,7 +64,8 @@ isSubsetOf f1 f2 =
 
 union :: Ord v => F v -> F v -> F v
 union f1 f2 = F
-  { unary = unary f1 `S.union` unary f2
+  { annot  = Nothing
+  , unary  = unary f1 `S.union` unary f2
   , binary = binary f1 `S.union` binary f2 }
 
 idep :: [v] -> [U v]
@@ -68,7 +73,8 @@ idep vs = [ (Identity, v :> v) | v <- vs ]
 
 complete :: Ord v => [U v] -> F v
 complete ds = F
-  { unary  = S.fromList ds
+  { annot  = Nothing
+  , unary  = S.fromList ds
   , binary = S.fromList bs }
   where
   bs = [ (i :> k, j :> l)
@@ -125,11 +131,8 @@ lfp vs f = go f f empty where
       where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate` f)
 
 correctWith :: Ord v => F v -> F v -> F v
-correctWith F{..} f = correct (k $ filter (not . isUnit) $ S.toList unary) f where
-  k ((_, _ :> v):ds)
-    | all (\(_,_ :> w) -> w == v) ds = v
-  k _               = error "oh noh"
-  isUnit (k, v :> w) = k == Identity && v == w
+correctWith F{..} f = correct a f
+  where Just a = annot
 
 correct :: Ord v => v -> F v -> F v
 correct v f = f `union` f { unary = unary' }
@@ -158,7 +161,7 @@ unity = complete . idep
 
 rip :: Ord v => [v] -> [F v] -> F v -> F v -> F v
 rip vs []  uv vw = uv `concatenate` vw
-rip vs vvs uv vw = uv `concatenate` (lfp vs $ foldr1 alternate vvs) `concatenate` vw
+rip vs vvs uv vw = lfp vs $ uv `concatenate` (lfp vs $ foldr1 alternate vvs) `concatenate` vw
 
 closeWith :: Ord v => F v -> F v -> F v
 closeWith f1 f2 = f1 `concatenate` f2
@@ -170,7 +173,8 @@ ripWith vs l vvs uv vw = correctWith l $ lfp vs $ uv `concatenate` vv `concatena
 
 alternate :: Ord v => F v -> F v -> F v
 alternate f1 f2 = F
-  { unary  = unary f1  `S.union` unary f2
+  { annot  = Nothing
+  , unary  = unary f1  `S.union` unary f2
   , binary = binary f1 `S.union` binary f2}
 
 

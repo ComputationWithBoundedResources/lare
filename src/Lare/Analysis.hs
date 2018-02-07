@@ -9,6 +9,7 @@ import           Data.Monoid                  ((<>))
 import qualified Data.Set                     as S
 import           Text.PrettyPrint.ANSI.Leijen (Doc, Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import Control.Monad (unless)
 
 import           Lare.Domain                  (Dom)
 import qualified Lare.Domain                  as D
@@ -19,6 +20,7 @@ import           Debug.Trace
 
 
 --- * Cfg ------------------------------------------------------------------------------------------------------------
+
 
 data Edge v e = Edge
   { src :: v
@@ -68,11 +70,16 @@ data Tree a = Tree a [Tree a]
 data Loop v e = Loop
   { program :: [Edge v e]
   , loopid  :: e
-  , outer   :: [v] }
+  , outer   :: [v]
+  , inflow  :: [v]
+  , outflow :: [v] }
   deriving (Show, Functor)
 
 
-inner ts = concatMap (\(Tree l _) -> outer l) ts
+inner ts = snub $ concatMap (\(Tree l _) -> outer l) ts
+innerflows ts = snub $ concatMap (\(Tree l _) -> inflow l) ts
+outerflows ts = snub $ concatMap (\(Tree l _) -> outflow l) ts
+
 
 cutset p ts = p \\ concatMap (\(Tree l _) -> program l) ts
 
@@ -126,8 +133,34 @@ ripAll dom vs cfg = foldr (ripOne dom $ rip dom) cfg vs
 ripAllWith :: Eq v => Dom st e -> e -> [v] -> T v e
 ripAllWith dom a vs cfg = foldr (ripOne dom $ ripWith dom a) cfg vs
 
-convertN :: (Show e, Show v, Pretty e, Eq v, Eq e) =>
-  Dom st e -> Tree (Loop (V v) e) -> Tree [Edge (V v) e]
+overIn dom ifs cfg = 
+  [ edge (src e) a (In v)
+    | V v <- ifs
+    , e   <- cfg
+    , dst e == (V v)
+    , let a = if src e == (V v) then unity dom else att e ]
+
+overOut dom ofs cfg = 
+  [ edge (Out v) a (dst e)
+    | V v <- ofs
+    , e   <- cfg
+    , src e == (V v)
+    , let a = if dst e == (V v) then unity dom else att e ]
+
+convertN :: (Show e, Show v, Pretty e, Ord v, Eq e, Pretty v) => Dom st e -> Tree (Loop (V v) e) -> Tree [Edge (V v) e]
+convertN dom (Tree Loop{..} []) = Tree cfg' []
+  where
+    cfg = program
+    cfg' =
+      cfg
+      & debug "CFG"
+      & mappend [ edge (In v) (unity dom) (V v)   | V v <- inflow ]
+      & mappend [ edge (V  v) (unity dom) (Out v) | V v <- outflow ]
+      & debug "Add outer ports"
+      & \g -> ripAllWith dom loopid (nodes g \\ (sources g ++ sinks g)) g
+      & debug "Rip internal nodes"
+      & fmap (closeWith dom loopid)
+      & debug "Close"
 convertN dom (Tree Loop{..} ps) = Tree cfg' ps'
   where
   ps' = map (convertN dom) ps
@@ -135,19 +168,16 @@ convertN dom (Tree Loop{..} ps) = Tree cfg' ps'
   cfg' =
     cfg
     & debug "CFG"
+    & mappend (overIn  dom (innerflows ps) cfg)
+    & mappend (overOut dom (outerflows ps) cfg)
+    & debug "Add inner ports"
     & mappend (concatMap (\(Tree es _) -> es) ps')
     & debug "Add subprogram"
-    & mappend [ edge (src e) (att e) (In v) | Out v <- inner ps, e <- cfg, dst e == (V v) ]
-    & mappend [ edge (Out v) (att e) (V v)  | Out v <- inner ps, e <- cfg, src e == (V v) ]
-    & debug "Add inner ports"
--- & mappend [ edge (V v)   (unity dom) (In v)  | Out v <- inner ps ]
--- & mappend [ edge (Out v) (unity dom) (V v) | Out v <- inner ps]
--- & debug "Add inner ports"
-    -- & ripAllWith dom loopid [In v  | Out v <- inner ps ]
-    -- & ripAllWith dom loopid [Out v | Out v <- inner ps ]
-    -- & debug "rip inner nodes"
-    & mappend [ edge (In v) (unity dom) (V v)  | Out v <- outer ]
-    & mappend [ edge (V v) (unity dom) (Out v) | Out v <- outer ]
+    & ripAllWith dom loopid [In v  | V v <- inflow ]
+    & ripAllWith dom loopid [Out v | V v <- outflow ]
+    & debug "rip existing outer nodes"
+    & mappend [ edge (In v) (unity dom) (V v)   | V v <- inflow ]
+    & mappend [ edge (V  v) (unity dom) (Out v) | V v <- outflow ]
     & debug "Add outer ports"
     & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
     & \g -> ripAllWith dom loopid (nodes g \\ (sources g ++ sinks g)) g
@@ -155,28 +185,30 @@ convertN dom (Tree Loop{..} ps) = Tree cfg' ps'
     & fmap (closeWith dom loopid)
     & debug "Close"
 
-convert :: (Eq v, Eq e, Pretty e, Show v, Show e) =>
+convert :: (Ord v, Eq e, Pretty e, Show v, Show e, Pretty v) =>
   Dom st e
   -> Top [Edge (V v) e] (Loop (V v) e)
   -> Tree [Edge (V v) e]
 convert dom (Top p ps) = Tree p' ps'
   where
   ps' = map (convertN dom) ps
+  cfg = cutset p ps
   p' =
-    p
+    cfg 
+    & debug "T:CFG"
+    & mappend (overIn  dom (innerflows ps) cfg)
+    & mappend (overOut dom (outerflows ps) cfg)
+    & debug "T:Add inner ports"
     & mappend (concatMap (\(Tree es _) -> es) ps')
-    & debug "Add subprogram"
-    & mappend [ edge (src e) (att e) (In v) | Out v <- inner ps, e <- p, dst e == (V v) ]
-    & mappend [ edge (Out v) (att e) (V v)  | Out v <- inner ps, e <- p, src e == (V v) ]
-    & debug "Add inner ports"
+    & debug "T:Add subprogram"
     & \g -> traceShow ((sources g ++ sinks g)) g
     & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
     & \g -> ripAll dom (nodes g \\ (sources g ++ sinks g)) g
-    & debug "Rip internal nodes"
+    & debug "T:Rip internal nodes"
     & debug "result"
 
 
-debug s cfg = trace ("[" ++ s ++ "]\n" ++ ppcfg cfg) cfg
+debug s cfg = trace ("[" ++ s ++ "]\n" ++ render (PP.indent 2 $ PP.align $ pretty cfg)) cfg
 
 ----- * Intermediate Representation ------------------------------------------------------------------------------------
 
@@ -197,26 +229,14 @@ toFlow0 vs (Top es ts) = Top (fmap k `fmap` es) (fmap (fmap k) `fmap` ts)
 
 --- * specialised instances ------------------------------------------------------------------------------------------
 
-correctWithV :: Ord v => F (Var v) -> F (Var v) -> F (Var v)
-correctWithV a f = F.correct (searchAnnotation a) f where
-
-searchAnnotation :: F (Var v) -> Var v
-searchAnnotation F.F{..} = go (S.toList unary) where
-  go []                 = error "oh no"
-  go ((_,_ :> Ann v):_) = Ann v
-  go (_:ds)             = go ds
 
 flowV :: Ord v => F.Flow (Var v) -> F.Flow (Var v)
-flowV f = f { D.ripWith = ripWithV, D.closeWith = closeWithV }
-
-ripWithV :: Ord v => [Var v] -> F (Var v) -> [F (Var v)] -> F (Var v) -> F (Var v) -> F (Var v)
-ripWithV _ _ []  uv vw = uv `F.concatenate` vw
-ripWithV vs l vvs uv vw = correctWithV l $ F.lfp vs $ uv `F.concatenate` vv `F.concatenate` vw
-  where vv = correctWithV l $ F.lfp vs $ foldr1 F.alternate vvs
+flowV f = f { D.closeWith = closeWithV }
 
 closeWithV :: Ord v => [Var v] -> F (Var v) -> F (Var v) -> F (Var v)
-closeWithV vs a f = a `F.concatenate` tick `F.concatenate` f 
-  where tick = F.plus vs Counter Counter (searchAnnotation a)
+closeWithV vs af f = af `F.concatenate` tick `F.concatenate` f  where
+  Just a = F.annot af
+  tick   = F.plus vs Counter Counter a
 
 
 fromAssignment :: Assignment (Var v) -> [F.U (Var v)]
@@ -235,14 +255,18 @@ fromAssignment (Assignment as) = do
 
 
 withAssignment :: Ord v => [Var v] -> Assignment (Var v) -> F (Var v)
-withAssignment vs a@(Assignment as) = F.complete $ idep ++ assign
-  where
-  idep   = [ ( v <=. v) | v <- (vs \\ [ v  | (v,_) <- as ]) ]
-  assign = fromAssignment a
+withAssignment vs a@(Assignment as) =
+  case as of 
+   [ (Ann v, b) ] -> F.complete (idep ++ fromAssignment a) `F.withAnnotation` Ann v
+   _              -> F.complete (idep ++ fromAssignment a)
+  where idep = [ ( v <=. v) | v <- (vs \\ [ v  | (v,_) <- as ]) ]
 
 
 
 ----- * Util -----------------------------------------------------------------------------------------------------------
+
+snub :: Ord a => [a] -> [a]
+snub = S.toList . S.fromList
 
 partition3 :: (a -> Bool) -> (a -> Bool) -> (a -> Bool) -> [a] -> ([a],[a],[a],[a])
 partition3 p1 p2 p3 = foldr select ([],[],[],[]) where
@@ -281,6 +305,26 @@ boundOfProof (Tree es _)
 ppcfg :: (Pretty e, Show v, Show e) => Cfg v e -> String
 ppcfg = unlines . map k
   where k e = show (src e) ++ "\t~>\t" ++ show (dst e) ++ "\t\n" ++ (render $ PP.indent 2 $ pretty (att e))
+
+
+
+convertWith :: (Pretty v, Pretty e, Show e, Show v, Eq e, Ord v) => Dom st e -> Top (Cfg (V v) e) (Loop (V v) e) -> Either [Char] (Tree [Edge (V v) e])
+convertWith dom t@(Top cfg _) = do
+  unless (hasSource cfg) $ err "missing source"
+  unless (hasSink cfg)   $ err "missing link"
+  let proof@(Tree flow _) = convert dom t
+  unless (hasValidFlow cfg flow) $ err "invalid flow"
+  return proof
+  where err msg = Left $ "convertWith: " ++ msg ++ "."
+
+
+hasSource, hasSink :: Eq v => Cfg v e -> Bool
+hasSource = not . null . sources
+hasSink   = not . null . sinks
+
+hasValidFlow :: Eq v => Cfg v e -> Cfg v e -> Bool
+hasValidFlow cfg flow = and [ any (\e -> src e == iv && dst e == ov) flow | iv <- ivs, ov <- ovs ]
+  where (ivs, ovs) = (sources cfg, sinks cfg)
 
 
 --ex1 :: Program (V Char) (RE String)
@@ -445,9 +489,7 @@ instance (Pretty v, Pretty e) => Pretty (Edge v e) where
 
 instance Pretty v => Pretty (V v) where
   pretty v = case v of
-    (V v)   -> pp v
-    (In v)  -> pp v
-    (Out v) -> pp v
-    -- where pp = PP.bold . pretty
-    where pp = pretty
+    (V v)   -> PP.space <> pretty v <> PP.space
+    (In v)  -> PP.char '<' <> pretty v <> PP.space
+    (Out v) -> PP.space <> pretty v <> PP.char '>'
 
