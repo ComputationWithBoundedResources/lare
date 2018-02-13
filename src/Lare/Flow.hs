@@ -1,19 +1,18 @@
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE ViewPatterns #-}
+-- | This module provides the dependency flow analysis.
+{-# LANGUAGE FlexibleInstances, RecordWildCards, ViewPatterns #-}
 module Lare.Flow where
 
-import           Data.Set   (Set)
-import qualified Data.Set   as S
+import           Data.Monoid                  ((<>))
+import           Data.Set                     (Set)
+import qualified Data.Set                     as S
 import           Text.PrettyPrint.ANSI.Leijen (Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import Data.Monoid ((<>))
+
+import qualified Lare.Domain                  as D
+import Lare.Util (ppList)
 
 
-import qualified Lare.Domain as D
-
-
+-- * Flow Domain ----------------------------------------------------------------------------------------------------
 
 type Flow v = D.Dom [v] (F v)
 
@@ -27,35 +26,43 @@ flow vs = D.Dom
   , D.closeWith = const closeWith }
 
 
---- * Dependency -----------------------------------------------------------------------------------------------------
-
+-- * Dependency -----------------------------------------------------------------------------------------------------
 
 data E v =  v :> v deriving (Eq, Ord, Show)
 data D = Identity | Additive | Multiplicative | Exponential
   deriving (Eq, Ord, Show, Enum)
 
-target (_, _ :> v) = v
 
+
+-- | A unary flow describes how a variable influences another.
+-- @(Additive, w :> v)@
+type U v = (D, E v)
+
+from, to :: U v -> v
+from (_, v :> _) = v
+to (_, _ :> w)   = w
+
+(<=.), (<+.), (<*.), (<^.) :: v -> v -> U v
 v <=. w = (Identity, w :> v)
 v <+. w = (Additive, w :> v)
 v <*. w = (Multiplicative, w :> v)
 v <^. w = (Exponential, w :> v)
 
-type U v = (D, E v)
+-- | A binary Flow keeps track duplicating dependencies.
 type B v = (E v, E v)
 
+-- | The \Flow\ abstraction domain.
 data F v = F
-  { annot  :: Maybe v
-  , unary  :: Set (U v)
+  { annot  :: Maybe v  -- ^ 
+  , unary  :: Set (U v) 
   , binary :: Set (B v) }
   deriving (Eq, Ord, Show)
 
+withAnnotation :: F v -> v -> F v
+withAnnotation f v = f { annot = Just v }
 
 empty :: F v
 empty = F { annot = Nothing, unary = S.empty, binary = S.empty}
-
-withAnnotation :: F v -> v -> F v
-withAnnotation f v = f { annot = Just v } 
 
 isSubsetOf :: Ord v => F v -> F v -> Bool
 isSubsetOf f1 f2 =
@@ -68,20 +75,25 @@ union f1 f2 = F
   , unary  = unary f1 `S.union` unary f2
   , binary = binary f1 `S.union` binary f2 }
 
+-- | The unary Identity dependencies for a given set of variables.
 idep :: [v] -> [U v]
 idep vs = [ (Identity, v :> v) | v <- vs ]
 
+-- | Computes binary dependencies.
 complete :: Ord v => [U v] -> F v
 complete ds = F
   { annot  = Nothing
   , unary  = S.fromList ds
-  , binary = S.fromList bs }
-  where
+  , binary = S.fromList bs }  
+  where 
   bs = [ (i :> k, j :> l)
-       | (d1, i :> k) <- ds
-       , (d2, j :> l) <- ds
+       | (a, i :> k) <- ds
+       , (b, j :> l) <- ds
        , i /= j || k /= l
-       , d1 `max` d2 <= Additive ]
+       , a `max` b <= Additive ]
+
+
+-- * Flowchart Statements -------------------------------------------------------------------------------------------
 
 skip :: Ord v => [v] -> F v
 skip = unity
@@ -140,10 +152,11 @@ correct v f = f `union` f { unary = unary' }
 
 concatenate :: Ord v => F v -> F v -> F v
 concatenate f1 f2 = F
-  { unary =
+  { annot = Nothing
+  , unary =
       S.fromList $
         [ (d1 `max` d2   , i :> k) | (d1, i :> x) <- us1, (d2, z :> k) <- us2, x == z ] ++
-        [ (Additive, i :> k) | (i :> x, i' :> x') <- bs1, i == i', (z :> k, z' :> k') <- bs2, k == k', x == z && x' == z']
+        [ (Multiplicative, i :> k) | (i :> x, i' :> x') <- bs1, i == i', (z :> k, z' :> k') <- bs2, k == k', x == z && x' == z']
 
   , binary =
       S.fromList $
@@ -161,7 +174,8 @@ unity = complete . idep
 
 rip :: Ord v => [v] -> [F v] -> F v -> F v -> F v
 rip vs []  uv vw = uv `concatenate` vw
-rip vs vvs uv vw = lfp vs $ uv `concatenate` (lfp vs $ foldr1 alternate vvs) `concatenate` vw
+-- rip vs vvs uv vw = lfp vs $ uv `concatenate` (lfp vs $ foldr1 alternate vvs) `concatenate` vw
+rip vs vvs uv vw = uv `concatenate` (foldr1 alternate vvs) `concatenate` vw
 
 closeWith :: Ord v => F v -> F v -> F v
 closeWith f1 f2 = f1 `concatenate` f2
@@ -177,7 +191,7 @@ alternate f1 f2 = F
   , unary  = unary f1  `S.union` unary f2
   , binary = binary f1 `S.union` binary f2}
 
-
+-- * Pretty ---------------------------------------------------------------------------------------------------------
 
 instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where
   pretty (d, i :> j) = pretty i <> PP.text " ~" <> ppd d <> PP.text "> " <> pretty j where
@@ -188,6 +202,6 @@ instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where
 
 
 instance (Eq v, Pretty v) => Pretty (F v) where
-  -- pretty F{..} = PP.align $ PP.vcat [ pretty u | u <- S.toList unary]  
-  pretty F{..} = PP.list [ pretty u | u@(d, i:> j) <- S.toList unary, d /= Identity || i/=j ] 
+  -- pretty F{..} = PP.align $ PP.vcat [ pretty u | u <- S.toList unary]
+  pretty F{..} = PP.list [ pretty u | u@(d, i:> j) <- S.toList unary, d /= Identity || i/=j ]
 
