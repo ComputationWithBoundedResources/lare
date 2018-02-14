@@ -5,14 +5,23 @@ import Data.Monoid ((<>))
 import           Text.PrettyPrint.ANSI.Leijen (Doc, Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
-import qualified Data.Set as S (empty, insert, member)
+import qualified Data.Set as S
 
-snub :: Ord a => [a] -> [a]
-snub = go S.empty where
-  go seen []            = []
+
+nub :: Ord a => [a] -> [a]
+nub = go S.empty where
+  go _    []            = []
   go seen (x:xs)
     | x `S.member` seen = go seen xs
     | otherwise         = x: go (x `S.insert` seen) xs
+
+intersect :: Ord a => [a] -> [a] -> [a]
+intersect xs ys = [ x | x <- xs, x `S.member` ys' ]
+  where ys' = S.fromList ys
+
+(\\) :: Ord a => [a] -> [a] -> [a]
+xs \\ ys = [ x | x <- xs, x `S.notMember` ys' ]
+  where ys' = S.fromList ys
 
 partition3 :: (a -> Bool) -> (a -> Bool) -> (a -> Bool) -> [a] -> ([a],[a],[a],[a])
 partition3 p1 p2 p3 = foldr select ([],[],[],[]) where

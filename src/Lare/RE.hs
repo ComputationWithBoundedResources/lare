@@ -28,7 +28,7 @@ data RE a
   | Alternate (RE a) (RE a)
   | Star (RE a)
   | Iterate (RE a) (RE a)
-  deriving Show
+  deriving (Show, Eq, Ord)
 
 unity :: RE a
 unity = Epsilon

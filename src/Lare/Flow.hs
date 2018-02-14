@@ -1,5 +1,5 @@
 -- | This module provides the dependency flow analysis.
-{-# LANGUAGE FlexibleInstances, RecordWildCards, ViewPatterns #-}
+{-# LANGUAGE FlexibleInstances, RecordWildCards #-}
 module Lare.Flow where
 
 import           Data.Monoid                  ((<>))
@@ -9,7 +9,6 @@ import           Text.PrettyPrint.ANSI.Leijen (Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import qualified Lare.Domain                  as D
-import Lare.Util (ppList)
 
 
 -- * Flow Domain ----------------------------------------------------------------------------------------------------
@@ -20,7 +19,7 @@ flow :: Ord v => [v] -> Flow v
 flow vs = D.Dom
   { D.ctx       = vs
   , D.unity     = unity
-  , D.rip       = rip
+  , D.rip       = const rip
   , D.ripWith   = ripWith
   , D.alternate = const alternate
   , D.closeWith = const closeWith }
@@ -136,10 +135,10 @@ fromK k
 -- --- * Operations -----------------------------------------------------------------------------------------------------
 
 lfp :: Ord v => [v] -> F v -> F v
-lfp vs f = go f f empty where
-  go f new old
+lfp vs f = go f empty where
+  go new old
     | new `isSubsetOf` old = old
-    | otherwise            = go f new' new
+    | otherwise            = go new' new
       where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate` f)
 
 correctWith :: Ord v => F v -> F v -> F v
@@ -172,16 +171,15 @@ concatenate f1 f2 = F
 unity :: Ord v => [v] -> F v
 unity = complete . idep
 
-rip :: Ord v => [v] -> [F v] -> F v -> F v -> F v
-rip vs []  uv vw = uv `concatenate` vw
--- rip vs vvs uv vw = lfp vs $ uv `concatenate` (lfp vs $ foldr1 alternate vvs) `concatenate` vw
-rip vs vvs uv vw = uv `concatenate` (foldr1 alternate vvs) `concatenate` vw
+rip :: Ord v => [F v] -> F v -> F v -> F v
+rip []  uv vw = uv `concatenate` vw
+rip vvs uv vw = uv `concatenate` (foldr1 alternate vvs) `concatenate` vw
 
 closeWith :: Ord v => F v -> F v -> F v
 closeWith f1 f2 = f1 `concatenate` f2
 
 ripWith :: Ord v => [v] -> F v -> [F v] -> F v -> F v -> F v
-ripWith vs _ []  uv vw = uv `concatenate` vw
+ripWith _  _ []  uv vw = uv `concatenate` vw
 ripWith vs l vvs uv vw = correctWith l $ lfp vs $ uv `concatenate` vv `concatenate` vw
   where vv = correctWith l $ lfp vs $ foldr1 alternate vvs
 

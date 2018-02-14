@@ -1,22 +1,27 @@
--- | This module provides the \rip\ algorithm, which abstracts Flowchart programs to flow properties.
-{-# LANGUAGE DeriveFoldable, DeriveFunctor, DeriveTraversable, FlexibleContexts, FlexibleInstances, RecordWildCards,
-             TypeFamilies, TypeOperators, ViewPatterns #-}
+-- | This module provides the \rip\ algorithm, which abstracts Flowchart programs to flow properties from start nodes
+-- to exit nodes.
+{-# LANGUAGE DeriveFoldable, DeriveFunctor, FlexibleInstances, RecordWildCards #-}
 {-# OPTIONS_GHC -Wall -fno-warn-name-shadowing #-}
 module Lare.Analysis where
 
+
 import           Control.Monad                (unless)
 import           Data.Function                ((&))
-import           Data.List                    ((\\))
 import           Data.Monoid                  ((<>))
 import           Text.PrettyPrint.ANSI.Leijen (Doc, Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           Lare.Domain                  (Dom)
 import qualified Lare.Domain                  as D
-import           Lare.Util                    (partition3, render, snub)
+import           Lare.Util
 
-import           Debug.Trace
+-- import           Debug.Trace
 
+-- debug :: Pretty a => String -> a -> a
+-- debug s cfg = trace ("[" ++ s ++ "]\n" ++ render (PP.indent 2 $ PP.align $ pretty cfg)) cfg
+
+debug :: String -> a -> a
+debug = const id
 
 -- * Cfg
 
@@ -36,14 +41,16 @@ lift2 k e1 e2 = edge (src e1) (att e1 `k` att e2) (dst e2)
 type Cfg v e = [Edge v e]
 
 nodes :: Ord v => Cfg v e -> [v]
-nodes cfg = snub $ fmap src cfg ++ fmap dst cfg
+nodes cfg = nub $ fmap src cfg ++ fmap dst cfg
 
 sources :: Ord v => Cfg v e ->  [v]
-sources cfg = snub (fmap src cfg) \\ snub (fmap dst cfg)
+sources cfg = nub (fmap src cfg) \\ nub (fmap dst cfg)
 
 sinks :: Ord v => Cfg v e -> [v]
-sinks cfg = snub (fmap dst cfg) \\ snub (fmap src cfg)
+sinks cfg = nub (fmap dst cfg) \\ nub (fmap src cfg)
 
+innards :: Ord v => Cfg v e -> [v]
+innards cfg = nodes cfg \\ (sources cfg ++ sinks cfg)
 
 -- | A wrapper for the vertex type.
 data Vtx v
@@ -53,14 +60,21 @@ data Vtx v
   deriving (Eq, Ord, Show)
 
 
---- * Program
+-- * Program
 
 data Top a b = Top a [Tree b]
-  deriving (Show, Functor, Foldable, Traversable)
+  deriving (Show, Functor, Foldable)
 
 data Tree a = Tree a [Tree a]
-  deriving (Show, Functor, Foldable, Traversable)
+  deriving (Show, Functor, Foldable)
 
+-- | A Simp
+data SimpleLoop v e = SimpleLoop
+  { program' :: [Edge v e]
+  , loopid'  :: e }
+  deriving Show
+
+-- | A Loop is an 'SimpleLoop' with additional information.
 data Loop v e = Loop
   { program :: [Edge v e]
   , loopid  :: e
@@ -69,20 +83,45 @@ data Loop v e = Loop
   , outflow :: [v] }
   deriving (Show, Functor)
 
+-- | Expected input of `rip`.
+--
+-- A program is a rooted tree with following syntactical properties:
+--
+--   * The root contains the whole CFG, with at least one start and exit node (ie. nodes with no incoming and outgoing edges respectively).
+--   * The CFG of the children are distinct (proper) subsets.
+--   * The loopid is unique.
+--
 type Program v e = Top  [Edge (Vtx v) e] (Loop (Vtx v) e)
+
+-- | Output of `rip`.
 type Proof   v e = Tree [Edge (Vtx v) e]
 
+toLoop :: (Ord v, Ord e) => Cfg v e -> [v] -> (SimpleLoop v e) -> Loop (Vtx v) e
+toLoop cfg ns SimpleLoop{program'=cfg',..} =
+  Loop
+    { program = [ edge (V $ src e) (att e) (V $ dst e) | e <- cfg'  ]
+    , loopid  = loopid'
+    , outer   = [ V v | v <- ns `intersect` nodes cfg' ]
+    , inflow  = nub [ V (src e1) | e1 <- cfg', e2 <- cfg \\ cfg', dst e2 == src e1 ]
+    , outflow = nub [ V (dst e1) | e1 <- cfg', e2 <- cfg \\ cfg', dst e1 == src e2 ] }
+
+-- | Transforms a loop structure with `SimpleLoop` to a program that can be applied to `rip`.
+toProgram :: (Ord v, Ord e) => Top [Edge v e] (SimpleLoop v e) -> Program v e
+toProgram (Top cfg ts) =
+  Top
+    [ edge (V $ src e) (att e) (V $ dst e) | e <- cfg  ]
+    (fmap (toLoop cfg $ nodes cfg) `fmap` ts)
 
 inner, innerflows, outerflows :: Ord v => [Tree (Loop v e)] -> [v]
-inner ts = snub $ concatMap (\(Tree l _) -> outer l) ts
-innerflows ts = snub $ concatMap (\(Tree l _) -> inflow l) ts
-outerflows ts = snub $ concatMap (\(Tree l _) -> outflow l) ts
+inner ts = nub $ concatMap (\(Tree l _) -> outer l) ts
+innerflows ts = nub $ concatMap (\(Tree l _) -> inflow l) ts
+outerflows ts = nub $ concatMap (\(Tree l _) -> outflow l) ts
 
-
-cutset :: (Eq v, Eq e) => [Edge v e] -> [Tree (Loop v e)] -> [Edge v e]
+cutset :: (Ord v, Ord e) => [Edge v e] -> [Tree (Loop v e)] -> [Edge v e]
 cutset p ts = p \\ concatMap (\(Tree l _) -> program l) ts
 
---- * Attribute Domain -----------------------------------------------------------------------------------------------
+
+-- * Abstract Domain
 
 unity :: Dom st e -> e
 unity D.Dom{..} = unity ctx
@@ -100,15 +139,12 @@ closeWith :: Dom st e -> e -> Edge v e -> Edge v e
 closeWith D.Dom{..} a = fmap (closeWith ctx a)
 
 
--- --- * Rip ------------------------------------------------------------------------------------------------------------
+-- * Rip
 
-
-debug :: Pretty a => String -> a -> a
-debug s cfg = trace ("[" ++ s ++ "]\n" ++ render (PP.indent 2 $ PP.align $ pretty cfg)) cfg
 
 type T v e = Cfg v e -> Cfg v e
 
-ripOne :: Eq v => Dom st e -> ([Edge v e] -> Edge v e -> Edge v e -> Edge v e) -> v -> T v e
+ripOne :: Eq v => Dom st e -> (Cfg v e -> Edge v e -> Edge v e -> Edge v e) -> v -> T v e
 ripOne dom ripper v cfg =
   let
   (vvs, uvs, vws, uws)
@@ -118,7 +154,6 @@ ripOne dom ripper v cfg =
       (\e -> src e == v) cfg
   in
   mergeParallel (alternate dom) $ uws ++ chainAll (ripper vvs) uvs vws
-
   where
 
   chainAll k es ds = [ k e1 e2 | e1 <- es, e2 <- ds ]
@@ -136,60 +171,24 @@ ripAll dom vs cfg = foldr (ripOne dom $ rip dom) cfg vs
 ripAllWith :: Eq v => Dom st e -> e -> [v] -> T v e
 ripAllWith dom a vs cfg = foldr (ripOne dom $ ripWith dom a) cfg vs
 
-overIn, overOut :: Eq v => Dom st e -> [Vtx v] -> [Edge (Vtx v) e] -> [Edge (Vtx v) e]
-overIn dom ifs cfg =
-  [ edge (src e) a (I v)
-    | V v <- ifs
-    , e   <- cfg
-    , dst e == (V v)
-    , let a = if src e == (V v) then unity dom else att e ]
-
-overOut dom ofs cfg =
-  [ edge (O v) a (dst e)
-    | V v <- ofs
-    , e   <- cfg
-    , src e == (V v)
-    , let a = if dst e == (V v) then unity dom else att e ]
-
-convertN :: (Show e, Show v, Pretty e, Ord v, Eq e, Pretty v) => Dom st e -> Tree (Loop (Vtx v) e) -> Tree [Edge (Vtx v) e]
-convertN dom (Tree Loop{..} []) = Tree cfg' []
-  where
-    cfg = program
-    cfg' =
-      cfg
-      & debug "CFG"
-      & mappend [ edge (I v) (unity dom) (V v) | V v <- inflow ]
-      & mappend [ edge (V v) (unity dom) (O v) | V v <- outflow ]
-      & debug "Add outer ports"
-      & \g -> ripAllWith dom loopid (nodes g \\ (sources g ++ sinks g)) g
-      & debug "Rip internal nodes"
-      & fmap (closeWith dom loopid)
-      & debug "Close"
+convertN :: (Show e, Show v, Pretty e, Ord v, Ord e, Pretty v) => Dom st e -> Tree (Loop (Vtx v) e) -> Tree [Edge (Vtx v) e]
+convertN dom (Tree Loop{program = cfg,..} []) = Tree cfg' [] where
+  cfg' =
+    cfg
+    & debug "CFG"
+    & mappend [ edge (I v) (unity dom) (V v) | V v <- inflow ]
+    & mappend [ edge (V v) (unity dom) (O v) | V v <- outflow ]
+    & debug "Add Outer Ports"
+    & (ripAllWith dom loopid =<< innards)
+    & debug "Rip internal nodes"
+    & fmap (closeWith dom loopid)
+    & debug "Close"
 convertN dom (Tree Loop{..} ps) = Tree cfg' ps'
   where
   ps' = map (convertN dom) ps
   cfg = cutset program ps
   cfg' =
     cfg
-
-    -- & debug "CFG"
-    -- & mappend (overIn  dom (innerflows ps) cfg)
-    -- & mappend (overOut dom (outerflows ps) cfg)
-    -- & debug "Add inner ports"
-    -- & mappend (concatMap (\(Tree es _) -> es) ps')
-    -- & debug "Add subprogram"
-
-    -- & debug "CFG"
-    -- & mappend [ edge (V v) (unity dom) (I v) | V v <- innerflows ps ]
-    -- & mappend [ edge (O v) (unity dom) (V v) | V v <- outerflows ps ]
-    -- & debug "Add inner ports"
-    -- & mappend (concatMap (\(Tree es _) -> es) ps')
-    -- & debug "Add subprogram"
-    -- & ripAll dom [I v | V v <- inflow ]
-    -- & ripAll dom [O v | V v <- outflow ]
-
-
-
     & debug "CFG"
     & mappend [ edge (V v) (unity dom) (I v) | V v <- innerflows ps ]
     & mappend [ edge (O v) (unity dom) (V v) | V v <- outerflows ps ]
@@ -203,13 +202,12 @@ convertN dom (Tree Loop{..} ps) = Tree cfg' ps'
     & mappend [ edge (I v) (unity dom) (V v) | V v <- inflow ]
     & mappend [ edge (V v) (unity dom) (O v) | V v <- outflow ]
     & debug "Add outer ports"
-    & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
-    & \g -> ripAllWith dom loopid (nodes g \\ (sources g ++ sinks g)) g
+    & (ripAllWith dom loopid =<< innards)
     & debug "Rip internal nodes"
     & fmap (closeWith dom loopid)
     & debug "Close"
 
-convert :: (Ord v, Eq e, Pretty e, Show v, Show e, Pretty v) =>
+convert :: (Ord v, Ord e, Pretty e, Show v, Show e, Pretty v) =>
   Dom st e
   -> Top [Edge (Vtx v) e] (Loop (Vtx v) e)
   -> Tree [Edge (Vtx v) e]
@@ -219,35 +217,19 @@ convert dom (Top p ps) = Tree p' ps'
   cfg = cutset p ps
   p' =
     cfg
-
-    -- & debug "T:CFG"
-    -- & mappend (overIn  dom (innerflows ps) cfg)
-    -- & mappend (overOut dom (outerflows ps) cfg)
-    & debug "CFG"
+    & debug "T:CFG"
     & mappend [ edge (V v) (unity dom) (I v) | V v <- innerflows ps ]
     & mappend [ edge (O v) (unity dom) (V v) | V v <- outerflows ps ]
-
     & debug "T:Add inner ports"
     & mappend (concatMap (\(Tree es _) -> es) ps')
     & debug "T:Add subprogram"
-    & \g -> traceShow ((sources g ++ sinks g)) g
-    & \g -> traceShow (nodes g \\ (sources g ++ sinks g)) g
-    & \g -> ripAll dom (nodes g \\ (sources g ++ sinks g)) g
+    & (ripAll dom =<< innards)
     & debug "T:Rip internal nodes"
-    & debug "result"
+    & debug "Fin"
 
 
-
-
-
-
-ppcfg :: (Pretty e, Show v, Show e) => Cfg v e -> String
-ppcfg = unlines . map k
-  where k e = show (src e) ++ "\t~>\t" ++ show (dst e) ++ "\t\n" ++ (render $ PP.indent 2 $ pretty (att e))
-
-
-
-convertWith :: (Pretty v, Pretty e, Show e, Show v, Eq e, Ord v) => Dom st e -> Top (Cfg (Vtx v) e) (Loop (Vtx v) e) -> Either [Char] (Tree [Edge (Vtx v) e])
+-- | Like convert but includes some sanity checks.
+convertWith :: (Pretty v, Pretty e, Show e, Show v, Ord e, Ord v) => Dom st e -> Top (Cfg (Vtx v) e) (Loop (Vtx v) e) -> Either [Char] (Tree [Edge (Vtx v) e])
 convertWith dom t@(Top cfg _) = do
   unless (hasSource cfg) $ err "missing source"
   unless (hasSink cfg)   $ err "missing link"
@@ -256,7 +238,6 @@ convertWith dom t@(Top cfg _) = do
   return proof
   where err msg = Left $ "convertWith: " ++ msg ++ "."
 
-
 hasSource, hasSink :: Ord v => Cfg v e -> Bool
 hasSource = not . null . sources
 hasSink   = not . null . sinks
@@ -264,105 +245,6 @@ hasSink   = not . null . sinks
 hasValidFlow :: Ord v => Cfg v e -> Cfg v e -> Bool
 hasValidFlow cfg flow = and [ any (\e -> src e == iv && dst e == ov) flow | iv <- ivs, ov <- ovs ]
   where (ivs, ovs) = (sources cfg, sinks cfg)
-
-
---ex1 :: Program (V Char) (RE String)
---ex1 =
---  Top
---    [a,b,e]
---    [ Tree
---      Loop
---      { program     = [c,d]
---      , loopid      = Sym "L"
---      , outer       = [Out 'C', Out 'B'] }
---      []
---    ]
---  where
---    a = edge (V 'I') (Sym "skip;") (V 'A')
---    b = edge (V 'A') (Sym "x1:=x3;") (V 'B')
---    c = edge (V 'B') (Sym "x2:=x3;") (V 'C')
---    d = edge (V 'C') (Sym "x3:=x3+x2;") (V 'B')
---    e = edge (V 'C') (Sym "x4:=x3;") (V 'F')
-
---runex1 = convert (rex) ex1
-
----- ex1' :: Program Char (RE String)
----- ex1' =
-----   Top
-----     [i,f,a,b,c,d,e]
-----     [ Tree
-----       Loop
-----       { program     = [a,b,c,d,e]
-----       , loopid      = 1
-----       , outer       = [Out 'A']
-----       , cuts        = [] }
-----       [ Tree
-----       Loop
-----       { program     = [b,c,d]
-----       , loopid      = 2
-----       , outer       = [Out 'C', Out 'B']
-----       , cuts        = [] }
-----       []
-----       ]
-----     ]
-----   where
-----     i = edge (V 'I') (Sym "s") (V 'A')
-----     f = edge (V 'A') (Sym "f") (V 'F')
-
-----     a = edge (V 'A') (Sym "a") (V 'B')
-----     b = edge (V 'B') (Sym "b") (V 'C')
-----     c = edge (V 'C') (Sym "c") (V 'D')
-----     d = edge (V 'D') (Sym "d") (V 'B')
-----     e = edge (V 'B') (Sym "e") (V 'A')
-
----- runex1' = convert (rex) ex1'
-
--- runex2 = convert (F.flow [1..6]) ex2
-
--- ex2 =
---   Top
---     [a,b,e]
---     [ Tree
---       Loop
---       { program     = [c,d]
---       , loopid      = F.copy vs 6 5
---       , outer       = [Out 'C', Out 'B'] }
---       []
---     ]
---   where
---     a = edge (V 'I') (F.skip vs) (V 'A')
---     b = edge (V 'A') (F.copy vs 1 3) (V 'B')
---     c = edge (V 'B') (F.copy vs 2 3) (V 'C')
---     d = edge (V 'C') (F.plus vs 3 1 2) (V 'B')
---     e = edge (V 'C') (F.copy vs 4 3) (V 'F')
---     vs = [1..6] :: [Int]
-
-
----- ex3 =
-----   Top
-----     [a,e]
-----     [ Tree
-----       Loop
-----       { program     = [d]
-----       , loopid      = (Var 'X', Just $ Sum [(1, Var 'j')])
-----       , outer       = [Out 2]
-----       , cuts        = [] }
-----       [ Tree
-----         Loop
-----           { program     = [b,c]
-----           , loopid      = (Var 'X', Just $ Sum [(1, Var 'j')])
-----           , outer       = [Out 3]
-----           , cuts        = [] }
-----         []
-----       ]
-----     ]
-----   where
-----     a = edge (V 1) (Assignment [ (v, Sum [(1, Var 'n')]) | v <- vs ]) (V 2)
-----     b = edge (V 2) (Assignment [ (v, Sum [(1,v)]) | v <- vs ]) (V 3)
-----     c = edge (V 3) (Assignment [ (v, Sum [(1,v)]) | v <- vs ]) (V 2)
-----     d = edge (V 3) (Assignment [ (v, Sum [(1,v)]) | v <- vs ]) (V 2)
-----     e = edge (V 2) (Assignment [ (v, Sum [(1,v)]) | v <- vs ]) (V 4)
-----     vs = [Var 'n', Var 'i', Var 'j']
 
 
 -- * Pretty
@@ -400,7 +282,7 @@ instance (Pretty v, Pretty e) => Pretty (Edge v e) where
   pretty Edge{..} = pretty src <> PP.text "\t ~> \t" <> pretty dst PP.</> pretty att
 
 instance Pretty v => Pretty (Vtx v) where
-  pretty v = case v of
+  pretty w = case w of
     (V v) -> PP.space <> pretty v <> PP.space
     (I v) -> PP.char '<' <> pretty v <> PP.space
     (O v) -> PP.space <> pretty v <> PP.char '>'

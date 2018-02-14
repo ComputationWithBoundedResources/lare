@@ -6,10 +6,10 @@ module Lare.Tick where
 import Data.List ((\\))
 import Data.Monoid ((<>))
 import qualified Data.Set                     as S (toList)
-import           Text.PrettyPrint.ANSI.Leijen (Doc, Pretty, pretty)
+import           Text.PrettyPrint.ANSI.Leijen (Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
-import           Lare.Analysis                (Edge (..), Program, Proof, Tree (..), Top(..), Vtx)
+import           Lare.Analysis                (Edge (..), Program, Proof, Tree (..), Top(..))
 import qualified Lare.Domain                  as D
 import           Lare.Flow                    (E ((:>)), F, (<=.),(<+.),(<*.))
 import qualified Lare.Flow                    as F
@@ -40,8 +40,8 @@ closeWith vs af f = af `F.concatenate` tick `F.concatenate` f  where
 
 -- * Bound Assignments
 
-data Bound var         = Unknown | Sum [(Int, var)] deriving (Eq, Show)
-newtype Assignment var = Assignment [ (var, Bound var) ] deriving (Eq, Show)
+data Bound var         = Unknown | Sum [(Int, var)] deriving (Eq, Ord, Show)
+newtype Assignment var = Assignment [ (var, Bound var) ] deriving (Eq, Ord, Show)
 
 toFlow :: Ord v => [Var v] -> Program n (Assignment (Var v)) -> Program n (F (Var v))
 toFlow vs (Top es ts) = Top (fmap k `fmap` es) (fmap (fmap k) `fmap` ts)
@@ -82,6 +82,7 @@ instance Ord Complexity where c1 <= c2 = rank c1 <= rank c2
 
 rank :: Complexity -> Int
 rank Constant   = 2
+rank Linear     = 5
 rank Polynomial = 11
 rank Primrec    = 42
 rank Indefinite = 99
@@ -126,3 +127,4 @@ instance Pretty v => Pretty (Bound v) where
 instance Pretty v => Pretty (Assignment v) where
   pretty (Assignment as) = ppList $ k `fmap` as
     where k (v,b) = pretty v <> PP.text " <= " <> pretty b
+
