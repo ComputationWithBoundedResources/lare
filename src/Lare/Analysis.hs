@@ -23,6 +23,7 @@ import           Lare.Util
 debug :: String -> a -> a
 debug = const id
 
+
 -- * Cfg
 
 data Edge v e = Edge
@@ -78,7 +79,6 @@ data SimpleLoop v e = SimpleLoop
 data Loop v e = Loop
   { program :: [Edge v e]
   , loopid  :: e
-  , outer   :: [v]
   , inflow  :: [v]
   , outflow :: [v] }
   deriving (Show, Functor)
@@ -96,12 +96,11 @@ type Program v e = Top  [Edge (Vtx v) e] (Loop (Vtx v) e)
 -- | Output of `rip`.
 type Proof   v e = Tree [Edge (Vtx v) e]
 
-toLoop :: (Ord v, Ord e) => Cfg v e -> [v] -> (SimpleLoop v e) -> Loop (Vtx v) e
-toLoop cfg ns SimpleLoop{program'=cfg',..} =
+toLoop :: (Ord v, Ord e) => Cfg v e -> (SimpleLoop v e) -> Loop (Vtx v) e
+toLoop cfg SimpleLoop{program'=cfg',..} =
   Loop
     { program = [ edge (V $ src e) (att e) (V $ dst e) | e <- cfg'  ]
     , loopid  = loopid'
-    , outer   = [ V v | v <- ns `intersect` nodes cfg' ]
     , inflow  = nub [ V (src e1) | e1 <- cfg', e2 <- cfg \\ cfg', dst e2 == src e1 ]
     , outflow = nub [ V (dst e1) | e1 <- cfg', e2 <- cfg \\ cfg', dst e1 == src e2 ] }
 
@@ -110,10 +109,9 @@ toProgram :: (Ord v, Ord e) => Top [Edge v e] (SimpleLoop v e) -> Program v e
 toProgram (Top cfg ts) =
   Top
     [ edge (V $ src e) (att e) (V $ dst e) | e <- cfg  ]
-    (fmap (toLoop cfg $ nodes cfg) `fmap` ts)
+    (fmap (toLoop cfg) `fmap` ts)
 
-inner, innerflows, outerflows :: Ord v => [Tree (Loop v e)] -> [v]
-inner ts = nub $ concatMap (\(Tree l _) -> outer l) ts
+innerflows, outerflows :: Ord v => [Tree (Loop v e)] -> [v]
 innerflows ts = nub $ concatMap (\(Tree l _) -> inflow l) ts
 outerflows ts = nub $ concatMap (\(Tree l _) -> outflow l) ts
 
@@ -140,7 +138,6 @@ closeWith D.Dom{..} a = fmap (closeWith ctx a)
 
 
 -- * Rip
-
 
 type T v e = Cfg v e -> Cfg v e
 

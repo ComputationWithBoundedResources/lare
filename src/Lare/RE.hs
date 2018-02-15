@@ -1,9 +1,8 @@
--- | This module provides \bounded regular expression\ abstract domain.
+-- | This module provides the /bounded regular expression/ abstract domain.
 {-# LANGUAGE FlexibleInstances #-}
 module Lare.RE where
 
 import           Data.Monoid                  ((<>))
-
 import           Text.PrettyPrint.ANSI.Leijen (Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
@@ -12,6 +11,7 @@ import qualified Lare.Domain                  as D
 
 -- * Bounded RegeEx Abstract Domain
 
+-- | Domain instance.
 rex :: D.Dom () (RE a)
 rex = D.Dom
   { D.ctx       = ()
@@ -21,13 +21,21 @@ rex = D.Dom
   , D.alternate = const alternate
   , D.closeWith = const closeWith }
 
+-- | Bounded Regular Expressions.
+--
+-- Like 'standard' regular expressions, but additionally provide an /iterate/ construct.
+-- Iterate (symbolically) bounds the number of repetition in contained star expressions.
+--
+-- For example,
+-- @Iterate "Z" $  Star (Sym "X:=X+1") `Concatenate` Star (Sym "Y:=Y+1)@
+-- indicates words of following form: @X:=X+1^m Y:=Y+1^n@ with @m+n <= Z@.
 data RE a
   = Sym a
   | Epsilon
   | Concatenate (RE a) (RE a)
   | Alternate (RE a) (RE a)
   | Star (RE a)
-  | Iterate (RE a) (RE a)
+  | Iterate a (RE a)
   deriving (Show, Eq, Ord)
 
 unity :: RE a
@@ -43,8 +51,8 @@ rip vv uv vw = uv `Concatenate` vv' `Concatenate` vw
 ripWith = rip
 
 closeWith :: RE a -> RE a -> RE a
-closeWith a@(Sym _) uv = Iterate a uv
-closeWith _ _          = error "LARE.RE: closeWith: the unexpected happened"
+closeWith (Sym a) uv = Iterate a uv
+closeWith _ _        = error "LARE.RE: closeWith: expect a Sym"
 
 
 -- * Pretty

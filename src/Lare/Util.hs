@@ -1,11 +1,9 @@
 module Lare.Util where
 
-import Data.Monoid ((<>))
-
+import           Data.Monoid                  ((<>))
+import qualified Data.Set                     as S
 import           Text.PrettyPrint.ANSI.Leijen (Doc, Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-
-import qualified Data.Set as S
 
 
 nub :: Ord a => [a] -> [a]
@@ -37,5 +35,5 @@ render = flip PP.displayS "" . (PP.renderPretty 0.5 240) . pretty
 
 ppList :: [Doc] -> Doc
 ppList [] = PP.empty
-ppList ds = PP.enclose PP.lbracket PP.rbracket $ foldr1 (\p acc -> (p <> PP.text ", " <> acc) ) ds
+ppList ds = PP.enclose PP.lbracket PP.rbracket $ foldr1 (\p acc -> (p <> PP.text ", " <> acc)) ds
 

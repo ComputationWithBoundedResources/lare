@@ -1,4 +1,4 @@
--- | This module provides the dependency flow analysis.
+-- | This module provides the \dependency flow\ abstract domain.
 {-# LANGUAGE FlexibleInstances, RecordWildCards #-}
 module Lare.Flow where
 
@@ -11,7 +11,7 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Lare.Domain                  as D
 
 
--- * Flow Domain ----------------------------------------------------------------------------------------------------
+-- * Flow Domain
 
 type Flow v = D.Dom [v] (F v)
 
@@ -25,21 +25,17 @@ flow vs = D.Dom
   , D.closeWith = const closeWith }
 
 
--- * Dependency -----------------------------------------------------------------------------------------------------
+-- * Flow Dependencies
 
-data E v =  v :> v deriving (Eq, Ord, Show)
+data E v =  v :> v
+  deriving (Eq, Ord, Show)
+
 data D = Identity | Additive | Multiplicative | Exponential
   deriving (Eq, Ord, Show, Enum)
 
 
-
--- | A unary flow describes how a variable influences another.
--- @(Additive, w :> v)@
+-- | A unary flow describes how a variable affects another.
 type U v = (D, E v)
-
-from, to :: U v -> v
-from (_, v :> _) = v
-to (_, _ :> w)   = w
 
 (<=.), (<+.), (<*.), (<^.) :: v -> v -> U v
 v <=. w = (Identity, w :> v)
@@ -47,13 +43,13 @@ v <+. w = (Additive, w :> v)
 v <*. w = (Multiplicative, w :> v)
 v <^. w = (Exponential, w :> v)
 
--- | A binary Flow keeps track duplicating dependencies.
+-- | The binary flow keeps track of duplicating dependencies.
 type B v = (E v, E v)
 
 -- | The \Flow\ abstraction domain.
 data F v = F
-  { annot  :: Maybe v  -- ^ 
-  , unary  :: Set (U v) 
+  { annot  :: Maybe v     -- ^ annotations are used for closure properties of reflexive flow
+  , unary  :: Set (U v)
   , binary :: Set (B v) }
   deriving (Eq, Ord, Show)
 
@@ -65,34 +61,41 @@ empty = F { annot = Nothing, unary = S.empty, binary = S.empty}
 
 isSubsetOf :: Ord v => F v -> F v -> Bool
 isSubsetOf f1 f2 =
-  unary f1 `S.isSubsetOf` unary f2 &&
+  unary  f1 `S.isSubsetOf` unary  f2 &&
   binary f1 `S.isSubsetOf` binary f2
 
 union :: Ord v => F v -> F v -> F v
 union f1 f2 = F
   { annot  = Nothing
-  , unary  = unary f1 `S.union` unary f2
+  , unary  = unary  f1 `S.union` unary  f2
   , binary = binary f1 `S.union` binary f2 }
 
--- | The unary Identity dependencies for a given set of variables.
-idep :: [v] -> [U v]
-idep vs = [ (Identity, v :> v) | v <- vs ]
+-- | The unary identity dependencies for a given set of variables.
+iudep :: [v] -> [U v]
+iudep vs = [ (Identity, v :> v) | v <- vs ]
+
+-- | Binary dependencies inferred from unary dependencies.
+ibdep :: Eq v => [U v] -> [B v]
+ibdep us =
+  [ (i :> k, j :> l)
+    | (a, i :> k) <- us
+    , (b, j :> l) <- us
+    , i /= j || k /= l
+    , a `max` b <= Additive ]
 
 -- | Computes binary dependencies.
 complete :: Ord v => [U v] -> F v
-complete ds = F
+complete us = F
   { annot  = Nothing
-  , unary  = S.fromList ds
-  , binary = S.fromList bs }  
-  where 
-  bs = [ (i :> k, j :> l)
-       | (a, i :> k) <- ds
-       , (b, j :> l) <- ds
-       , i /= j || k /= l
-       , a `max` b <= Additive ]
+  , unary  = S.fromList us
+  , binary = S.fromList $ ibdep us }
+
+-- | Purges invalid binary dependencies.
+sanitize :: Ord v => F v -> F v
+sanitize f@F{..} = f{ binary = binary `S.intersection` S.fromList (ibdep $ S.toList unary) }
 
 
--- * Flowchart Statements -------------------------------------------------------------------------------------------
+-- * Flowchart Statements
 
 skip :: Ord v => [v] -> F v
 skip = unity
@@ -112,34 +115,17 @@ mult vs r s t = complete $
   (Multiplicative, s :> r) :(Multiplicative, t :> r) :[ (Identity, v :> v) | v <- vs, v /= r ]
 
 
-fromK :: Int -> D
-fromK k
-  | k < 0     = fromK (-k)
-  | k == 0    = Identity
-  | k == 1    = Additive
-  | otherwise = Multiplicative
+-- * Domain Operations
 
--- (.=) :: v -> v -> U v
--- (.=) v1 v2 = (Identity , v1 :> v2)
-
--- (.+) :: v -> v -> U v
--- (.+) v1 v2 = (Additive , v1 :> v2)
-
--- (.*) :: v -> v -> U v
--- (.*) v1 v2 = (Multiplicative , v1 :> v2)
-
--- (.^) :: v -> v -> U v
--- (.^) v1 v2 = (Exponential , v1 :> v2)
-
-
--- --- * Operations -----------------------------------------------------------------------------------------------------
+unity :: Ord v => [v] -> F v
+unity = complete . iudep
 
 lfp :: Ord v => [v] -> F v -> F v
 lfp vs f = go f empty where
   go new old
     | new `isSubsetOf` old = old
     | otherwise            = go new' new
-      where new' = complete [ (Identity, v :> v) | v <- vs ] `union` old `union` (old `concatenate` f)
+    where new' = unity vs `union` (old `concatenate` f)
 
 correctWith :: Ord v => F v -> F v -> F v
 correctWith F{..} f = correct a f
@@ -150,6 +136,7 @@ correct v f = f `union` f { unary = unary' }
   where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
 
 concatenate :: Ord v => F v -> F v -> F v
+-- concatenate f1 f2 = sanitize $ F
 concatenate f1 f2 = F
   { annot = Nothing
   , unary =
@@ -168,9 +155,6 @@ concatenate f1 f2 = F
     bs1 = S.toList (binary f1)
     bs2 = S.toList (binary f2)
 
-unity :: Ord v => [v] -> F v
-unity = complete . idep
-
 rip :: Ord v => [F v] -> F v -> F v -> F v
 rip []  uv vw = uv `concatenate` vw
 rip vvs uv vw = uv `concatenate` (foldr1 alternate vvs) `concatenate` vw
@@ -184,12 +168,10 @@ ripWith vs l vvs uv vw = correctWith l $ lfp vs $ uv `concatenate` vv `concatena
   where vv = correctWith l $ lfp vs $ foldr1 alternate vvs
 
 alternate :: Ord v => F v -> F v -> F v
-alternate f1 f2 = F
-  { annot  = Nothing
-  , unary  = unary f1  `S.union` unary f2
-  , binary = binary f1 `S.union` binary f2}
+alternate = union
 
--- * Pretty ---------------------------------------------------------------------------------------------------------
+
+-- * Pretty
 
 instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where
   pretty (d, i :> j) = pretty i <> PP.text " ~" <> ppd d <> PP.text "> " <> pretty j where
@@ -197,7 +179,6 @@ instance {-# Overlapping #-} Pretty v => Pretty (D, E v) where
     ppd Additive       = PP.char '+'
     ppd Multiplicative = PP.char '*'
     ppd Exponential    = PP.char '^'
-
 
 instance (Eq v, Pretty v) => Pretty (F v) where
   -- pretty F{..} = PP.align $ PP.vcat [ pretty u | u <- S.toList unary]

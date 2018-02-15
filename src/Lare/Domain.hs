@@ -1,7 +1,7 @@
--- | This module provides the interface for our abstract domain.
+-- | This module provides the interface for our abstract flow domain.
 module Lare.Domain where
 
--- | Domain has a state @st@ and operations over edge labelles @e@.
+-- | A domain has a internal state @st@ and operations over edge labels @e@.
 data Dom st e = Dom
   { ctx       :: st
   , unity     :: st -> e

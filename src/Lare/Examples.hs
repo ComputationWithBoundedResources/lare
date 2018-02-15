@@ -1,7 +1,6 @@
 -- | This module provides some motivating examples.
 module Lare.Examples where
 
-
 import qualified Data.Map.Strict as M
 
 import           Lare.Analysis
@@ -10,7 +9,7 @@ import           Lare.RE
 import           Lare.Tick
 
 
--- | An example using the regular expressions (`RE`) domain.
+-- | An example using the regular expressions ('RE') domain.
 --
 -- >>> putStrLn $ render ex1
 --  I  ~>  A   skip;
@@ -43,7 +42,7 @@ ex1 = toProgram $
     e = edge 'C' (Sym "x4:=x3;")    'F'
 
 
--- |  An example using the flow (`Flow`) domain.
+-- |  An example using the flow ('Flow') domain.
 --
 -- >>> putStrLn $ render ex2
 --  I  ~>  A   []
@@ -81,7 +80,7 @@ ex2 = toProgram $
 ex3vs :: [Var Int]
 ex3vs = [ Ann 616, Huge, Counter, K ] ++ [ Var v | v <- [1..5] ]
 
--- |  An example using the tick (`Tick`) domain.
+-- |  An example using the tick ('Tick') domain.
 --
 -- >>> putStrLn $ render ex3
 --  I  ~>  A   [1 <= 1, 2 <= 2, 3 <= 3, 4 <= 4, 5 <= 5, 616 <= 616, tick <= tick, K <= K, huge <= huge]

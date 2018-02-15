@@ -1,19 +1,17 @@
--- | This module provides counter instumentation for the `Flow` domain.
+-- | This module provides counter instrumentation for the `Flow` domain.
 {-# LANGUAGE RecordWildCards #-}
 module Lare.Tick where
 
-
-import Data.List ((\\))
-import Data.Monoid ((<>))
+import           Data.Monoid                  ((<>))
 import qualified Data.Set                     as S (toList)
 import           Text.PrettyPrint.ANSI.Leijen (Pretty, pretty)
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
-import           Lare.Analysis                (Edge (..), Program, Proof, Tree (..), Top(..))
+import           Lare.Analysis                (Edge (..), Loop (..), Program, Proof, Top (..), Tree (..))
 import qualified Lare.Domain                  as D
-import           Lare.Flow                    (E ((:>)), F, (<=.),(<+.),(<*.))
+import           Lare.Flow                    (E ((:>)), F, (<*.), (<+.), (<=.))
 import qualified Lare.Flow                    as F
-import           Lare.Util (ppList)
+import           Lare.Util                    (ppList, (\\))
 
 
 data Var v
@@ -21,17 +19,17 @@ data Var v
   | Ann v   -- ^ variables for bound annotation
   | Counter -- ^ a counter variable
   | K       -- ^ used to represent an arbitrary but fixed constant
-  | Huge    -- ^ used to define \unbounded\ or \unknonw\ values
+  | Huge    -- ^ used to define \unbounded\ or \unknown\ values
   deriving (Eq, Ord, Show)
 
 
--- | An extension to the `Flow` domain that supports counter.
+-- | An extension to the `Flow` domain that supports counter instrumentation.
 ticked :: Ord v => F.Flow (Var v) -> F.Flow (Var v)
 ticked f = f { D.closeWith = closeWith }
 
 -- | Adds bounding information for subprograms.
 --
--- Informally  @closeWith vs bound summary@ simulates @bound <= expresion; tick += bound; summary@.
+-- Informally  @closeWith vs bound summary@ simulates @bound <= expression; tick += bound; summary@.
 closeWith :: Ord v => [Var v] -> F (Var v) -> F (Var v) -> F (Var v)
 closeWith vs af f = af `F.concatenate` tick `F.concatenate` f  where
   Just a = F.annot af
@@ -44,9 +42,12 @@ data Bound var         = Unknown | Sum [(Int, var)] deriving (Eq, Ord, Show)
 newtype Assignment var = Assignment [ (var, Bound var) ] deriving (Eq, Ord, Show)
 
 toFlow :: Ord v => [Var v] -> Program n (Assignment (Var v)) -> Program n (F (Var v))
-toFlow vs (Top es ts) = Top (fmap k `fmap` es) (fmap (fmap k) `fmap` ts)
+toFlow vs (Top es ts) = Top (fmap k `fmap` es) (fmap (toFlow' k) `fmap` ts)
   where k = withAssignment vs
 
+toFlow' :: Eq v => (Assignment (Var v) -> F (Var v)) -> Loop n (Assignment (Var v)) -> Loop n (F (Var v))
+toFlow' k l@Loop{..} = l{ program = fmap k `fmap` program, loopid = k loopid `F.withAnnotation` a}
+  where [a] = [ v | let Assignment as = loopid, (v@Ann{}, Sum bs) <- as, bs /= [(1,v)] ]
 
 fromAssignment :: Assignment (Var v) -> [F.U (Var v)]
 fromAssignment (Assignment as) = do
@@ -64,13 +65,8 @@ fromAssignment (Assignment as) = do
 
 
 withAssignment :: Ord v => [Var v] -> Assignment (Var v) -> F (Var v)
-withAssignment vs a@(Assignment as) =
-  case as of
-   [ (Ann v, _) ] -> F.complete (idep ++ fromAssignment a) `F.withAnnotation` Ann v
-   _              -> F.complete (idep ++ fromAssignment a)
+withAssignment vs a@(Assignment as) = F.complete (idep ++ fromAssignment a)
   where idep = [ ( v <=. v) | v <- (vs \\ [ v  | (v,_) <- as ]) ]
-
-
 
 
 -- * Bound Inference
@@ -87,7 +83,7 @@ rank Polynomial = 11
 rank Primrec    = 42
 rank Indefinite = 99
 
--- | Computes bound of flow taking the concretiasation function into account.
+-- | Computes bound of flow taking the concretisation function into account.
 bound :: Eq v => F (Var v) -> Complexity
 bound F.F{..}
   | isIndefinite = Indefinite
@@ -118,7 +114,7 @@ instance Pretty v => Pretty (Var v) where
   pretty K       = PP.text "K"
 
 instance Pretty v => Pretty (Bound v) where
-  pretty Unknown  = PP.text "unknwon"
+  pretty Unknown  = PP.text "unknown"
   pretty (Sum cs) = PP.encloseSep PP.empty PP.empty (PP.text " + ") $ k `fmap` cs where
     k (i,v)
      | i == 1    = PP.pretty v
