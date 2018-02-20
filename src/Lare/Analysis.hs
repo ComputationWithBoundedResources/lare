@@ -243,7 +243,9 @@ hasSource = not . null . sources
 hasSink   = not . null . sinks
 
 hasValidFlow :: Ord v => Cfg v e -> Cfg v e -> Bool
-hasValidFlow cfg flow = and [ any (\e -> src e == iv && dst e == ov) flow | iv <- ivs, ov <- ovs ]
+hasValidFlow cfg flows = 
+  all (\iv -> any (\ov -> any (\flow -> iv == src flow && ov == dst flow) flows) ovs) ivs &&
+  all (\ov -> any (\iv -> any (\flow -> iv == src flow && ov == dst flow) flows) ivs) ovs
   where (ivs, ovs) = (sources cfg, sinks cfg)
 
 
