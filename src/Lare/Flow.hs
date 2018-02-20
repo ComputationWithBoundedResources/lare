@@ -46,6 +46,8 @@ v <^. w = (Exponential, w :> v)
 -- | The binary flow keeps track of duplicating dependencies.
 type B v = (E v, E v)
 
+-- MS: these sets can get pretty big easily and concatenation expensive. Another representation, as for example Maps
+-- of Sets, should provide better indexing.
 -- | The \Flow\ abstraction domain.
 data F v = F
   { annot  :: Maybe v     -- ^ annotations are used for closure properties of reflexive flow
