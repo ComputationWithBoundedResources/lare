@@ -195,7 +195,7 @@ convertN dom (Tree Loop{..} ps) = Tree cfg' ps'
     & ripAll dom [I v | V v <- innerflows ps ]
     & ripAll dom [O v | V v <- outerflows ps ]
 
-    & debug "rip existing outer nodes"
+    & debug "Rip port nodes"
     & mappend [ edge (I v) (unity dom) (V v) | V v <- inflow ]
     & mappend [ edge (V v) (unity dom) (O v) | V v <- outflow ]
     & debug "Add outer ports"
@@ -220,6 +220,9 @@ convert dom (Top p ps) = Tree p' ps'
     & debug "T:Add inner ports"
     & mappend (concatMap (\(Tree es _) -> es) ps')
     & debug "T:Add subprogram"
+    & ripAll dom [I v | V v <- innerflows ps ]
+    & ripAll dom [O v | V v <- outerflows ps ]
+    & debug "T:Rip port nodes"
     & (ripAll dom =<< innards)
     & debug "T:Rip internal nodes"
     & debug "Fin"
