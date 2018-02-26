@@ -67,7 +67,7 @@ isSubsetOf f1 f2 =
   binary f1 `S.isSubsetOf` binary f2
 
 union :: Ord v => F v -> F v -> F v
-union f1 f2 = F
+union f1 f2 = sanitize $ F
   { annot  = Nothing
   , unary  = unary  f1 `S.union` unary  f2
   , binary = binary f1 `S.union` binary f2 }
@@ -138,7 +138,6 @@ correct v f = f `union` f { unary = unary' }
   where unary' =  S.fromList [ (succ d, v :> j) | (d, j :> i) <- S.toList (unary f), j == i, d == Additive || d == Multiplicative ]
 
 concatenate :: Ord v => F v -> F v -> F v
--- concatenate f1 f2 = sanitize $ F
 concatenate f1 f2 = F
   { annot = Nothing
   , unary =
@@ -148,8 +147,8 @@ concatenate f1 f2 = F
 
   , binary =
       S.fromList $
-        [ (i :> k, i :> k')  | (d1, i :> x) <- us1, d1 <= Additive, (z :> k, z' :> k') <- bs2, x == z && x == z' ] ++
-        [ (i :> k, i' :> k)  | (i :> x, i' :> x') <- bs1,  (d2, z :> k) <- us2, d2 <= Additive, x == z && x' == z]  ++
+        [ (i :> k, i :> k')  | (d1, i :> x) <- us1, d1 <= Additive, (z :> k, z' :> k') <- bs2, x == z && x == z', k /= k' ] ++
+        [ (i :> k, i' :> k)  | (i :> x, i' :> x') <- bs1,  (d2, z :> k) <- us2, d2 <= Additive, x == z && x' == z, i /= i']  ++
         [ (i :> k, i' :> k') | (i :> x, i' :> x') <- bs1, (z :> k, z' :> k') <- bs2, i /= i' || k /= k', x == z && x' == z' ] }
   where
     us1 = S.toList (unary f1)
