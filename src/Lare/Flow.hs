@@ -127,7 +127,7 @@ lfp vs f = go f empty where
   go new old
     | new `isSubsetOf` old = old
     | otherwise            = go new' new
-    where new' = unity vs `union` (old `concatenate` f)
+    where new' = unity vs `union` (new `concatenate` f)
 
 correctWith :: Ord v => F v -> F v -> F v
 correctWith F{..} f = correct a f
