@@ -1,5 +1,5 @@
 name:                lare
-version:             0.1.0.1
+version:             0.1.0.2
 synopsis:            Implicit Computation Complexity of Fowchart Programs
 homepage:            https://github.com/mischel/lare#readme
 license:             BSD3
